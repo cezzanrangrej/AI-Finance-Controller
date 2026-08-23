@@ -33,6 +33,23 @@ class RunModel(Base):
     auto_resolution_recall = Column(Float, nullable=True)
     ground_truth_accuracy = Column(Float, nullable=True)
 
+    # LLM Provider Metadata & Token Usage
+    llm_provider = Column(String(20), nullable=True)
+    llm_mode = Column(String(20), nullable=True)
+    llm_model = Column(String(50), nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    llm_cases_selected = Column(Integer, nullable=True)
+    llm_cases_completed = Column(Integer, nullable=True)
+    llm_cases_not_evaluated = Column(Integer, nullable=True)
+
+    # Multi-run Evaluation Group Metadata
+    evaluation_group_id = Column(String(50), nullable=True, index=True)
+    evaluation_run_number = Column(Integer, nullable=True)
+    evaluation_runs_total = Column(Integer, nullable=True)
+
+
     # Phase-separated timing & throughput metrics
     phase1_time_sec = Column(Float, nullable=True)
     phase2_time_sec = Column(Float, nullable=True)

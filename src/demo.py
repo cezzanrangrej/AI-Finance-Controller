@@ -16,6 +16,8 @@ _project_root = os.path.abspath(os.path.join(_current_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+import src.config  # Loads .env variables
+
 # UTF-8 stdout
 if sys.stdout.encoding != "utf-8":
     try:
@@ -31,6 +33,7 @@ client = TestClient(app)
 
 
 def run_e2e_demo():
+    os.environ["LLM_PROVIDER"] = "demo"
     print("Initiating Phase 3.1 End-to-End Reconciliation & AI Investigation Pipeline...\n")
     response = client.post("/api/runs")
 
@@ -48,13 +51,18 @@ def run_e2e_demo():
     exceptions_resp = client.get(f"/api/runs/{run_id}/exceptions")
     exceptions = exceptions_resp.json()
 
-    is_demo = os.getenv("OPENAI_API_KEY") is None or os.getenv("OPENAI_API_KEY") == ""
-    mode_label = "DEMO MODE" if is_demo else "LIVE MODEL MODE"
+    provider_label = str(metrics.get("llm_provider", "demo")).upper()
+    mode_label = str(metrics.get("llm_mode", "DEMO"))
+    model_name = str(metrics.get("llm_model", "demo"))
 
     print("========================================")
     print("AI FINANCE CONTROLLER")
-    print(f"PHASE 3.1 ({mode_label})")
+    print("PHASE 3.1 BATCH RECONCILIATION")
     print("========================================\n")
+
+    print(f"LLM Provider:               {provider_label}")
+    print(f"Mode:                       {mode_label}")
+    print(f"Model:                      {model_name}\n")
 
     print(f"Records processed:          {metrics['total_records']}\n")
 

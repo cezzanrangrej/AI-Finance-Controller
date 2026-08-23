@@ -105,6 +105,10 @@ def create_run(db: Session = Depends(get_db)):
     phase1_throughput = total_records / phase1_time_sec
     avg_time_per_record = end_to_end_time_sec / total_records
 
+    provider_name = getattr(llm_client, "provider", "demo")
+    mode_name = getattr(llm_client, "mode", "DEMO")
+    model_name = getattr(llm_client, "model", "demo")
+
     run_data = {
         "id": run_id,
         "total_records": total_records,
@@ -117,6 +121,12 @@ def create_run(db: Session = Depends(get_db)):
         "initial_match_rate": initial_match_rate,
         "agent_resolution_rate": agent_resolution_rate,
         "final_resolution_rate": final_resolution_rate,
+        "llm_provider": provider_name,
+        "llm_mode": mode_name,
+        "llm_model": model_name,
+        "prompt_tokens": getattr(llm_client, "last_prompt_tokens", None),
+        "completion_tokens": getattr(llm_client, "last_completion_tokens", None),
+        "total_tokens": getattr(llm_client, "last_total_tokens", None),
         "phase1_accuracy": eval_results.phase1_accuracy,
         "phase2_accuracy": eval_results.phase2_decision_accuracy,
         "auto_resolution_precision": eval_results.auto_resolution_precision,
@@ -149,6 +159,12 @@ def create_run(db: Session = Depends(get_db)):
         initial_match_rate=run_model.initial_match_rate,
         agent_resolution_rate=run_model.agent_resolution_rate,
         final_resolution_rate=run_model.final_resolution_rate,
+        llm_provider=getattr(run_model, "llm_provider", provider_name),
+        llm_mode=getattr(run_model, "llm_mode", mode_name),
+        llm_model=getattr(run_model, "llm_model", model_name),
+        prompt_tokens=getattr(run_model, "prompt_tokens", None),
+        completion_tokens=getattr(run_model, "completion_tokens", None),
+        total_tokens=getattr(run_model, "total_tokens", None),
         phase1_accuracy=run_model.phase1_accuracy,
         phase2_accuracy=run_model.phase2_accuracy,
         auto_resolution_precision=run_model.auto_resolution_precision,
@@ -180,6 +196,12 @@ def list_runs(limit: int = 20, db: Session = Depends(get_db)):
             initial_match_rate=r.initial_match_rate,
             agent_resolution_rate=r.agent_resolution_rate,
             final_resolution_rate=r.final_resolution_rate,
+            llm_provider=getattr(r, "llm_provider", "demo") or "demo",
+            llm_mode=getattr(r, "llm_mode", "DEMO") or "DEMO",
+            llm_model=getattr(r, "llm_model", "demo") or "demo",
+            prompt_tokens=getattr(r, "prompt_tokens", None),
+            completion_tokens=getattr(r, "completion_tokens", None),
+            total_tokens=getattr(r, "total_tokens", None),
             phase1_accuracy=r.phase1_accuracy,
             phase2_accuracy=r.phase2_accuracy,
             auto_resolution_precision=r.auto_resolution_precision,

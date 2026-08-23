@@ -1,0 +1,346 @@
+{
+  "evaluation_group_id": "eval_group_4ec620db5a",
+  "provider": "demo",
+  "model": "demo",
+  "dataset_size": 100,
+  "phase1_exception_count": 30,
+  "runs": 3,
+  "cases_per_run": 5,
+  "results": [
+    {
+      "run_number": 1,
+      "run_id": "run_demo_293b41fa",
+      "cases_selected": 5,
+      "cases_completed": 5,
+      "cases_not_evaluated": 0,
+      "correct_decisions": 5,
+      "auto_resolved": 2,
+      "auto_resolved_correct": 2,
+      "human_review": 3,
+      "human_review_correct": 3,
+      "ground_truth_auto_resolvable": 2,
+      "decision_accuracy": 100.0,
+      "auto_resolution_precision": 100.0,
+      "auto_resolution_recall": 100.0,
+      "phase2_time_sec": 0.001,
+      "total_tokens": null,
+      "investigated_cases": [
+        {
+          "transaction_id": "TXN003",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "BANK_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 100.0,
+          "reason": "Bank credit (\u20b914,110) equals expected settlement (\u20b914,210) minus documented adjustment of \u20b9100.",
+          "evidence": [
+            "Payment captured = \u20b914,500",
+            "Ledger gross = \u20b914,500, fee = \u20b9290",
+            "Bank credit (BNK_REF_0003) = \u20b914,110",
+            "Adjustment (SETTLEMENT_ADJUSTMENT): \u20b9100 (Standard settlement adjustment charge)",
+            "Calculation: \u20b914,210 - \u20b9100 = \u20b914,110"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.004320Z"
+        },
+        {
+          "transaction_id": "TXN008",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "GROSS_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 1000.0,
+          "reason": "Bank credit (\u20b920,079) equals expected settlement (\u20b921,079) minus documented adjustment of \u20b91,000.",
+          "evidence": [
+            "Payment captured = \u20b920,700",
+            "Ledger gross = \u20b921,700, fee = \u20b9621",
+            "Bank credit (BNK_REF_0008) = \u20b920,079",
+            "Adjustment (GROSS_INVOICE_ADJUSTMENT): \u20b91,000 (Merchant gross amount adjustment reference)",
+            "Calculation: \u20b921,079 - \u20b91,000 = \u20b920,079"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.004320Z"
+        },
+        {
+          "transaction_id": "TXN019",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b925,413 is \u20b91,000 lower than expected settlement (\u20b926,413) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b925,800",
+            "Ledger gross = \u20b926,800, fee = \u20b9387",
+            "Expected settlement = \u20b926,413",
+            "Bank credit = \u20b925,413"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.005294Z"
+        },
+        {
+          "transaction_id": "TXN024",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Multiple (2) bank settlement records found for single transaction.",
+          "evidence": [
+            "Payment amount = \u20b924,100",
+            "Ledger gross = \u20b924,100, fee = \u20b9361",
+            "Expected settlement = \u20b923,739"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank statement for potential duplicate credit.",
+          "timestamp": "2026-08-23T09:41:58.005294Z"
+        },
+        {
+          "transaction_id": "TXN037",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b910,379 is \u20b90 lower than expected settlement (\u20b910,379) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b910,700",
+            "Ledger gross = \u20b910,700, fee = \u20b9321",
+            "Expected settlement = \u20b910,379",
+            "Bank credit = \u20b910,379"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.005294Z"
+        }
+      ]
+    },
+    {
+      "run_number": 2,
+      "run_id": "run_demo_3a0c6665",
+      "cases_selected": 5,
+      "cases_completed": 5,
+      "cases_not_evaluated": 0,
+      "correct_decisions": 5,
+      "auto_resolved": 2,
+      "auto_resolved_correct": 2,
+      "human_review": 3,
+      "human_review_correct": 3,
+      "ground_truth_auto_resolvable": 2,
+      "decision_accuracy": 100.0,
+      "auto_resolution_precision": 100.0,
+      "auto_resolution_recall": 100.0,
+      "phase2_time_sec": 0.0021,
+      "total_tokens": null,
+      "investigated_cases": [
+        {
+          "transaction_id": "TXN010",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "GROSS_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 1000.0,
+          "reason": "Bank credit (\u20b945,143) equals expected settlement (\u20b946,143) minus documented adjustment of \u20b91,000.",
+          "evidence": [
+            "Payment captured = \u20b946,300",
+            "Ledger gross = \u20b947,300, fee = \u20b91,157",
+            "Bank credit (BNK_REF_0010) = \u20b945,143",
+            "Adjustment (GROSS_INVOICE_ADJUSTMENT): \u20b91,000 (Merchant gross amount adjustment reference)",
+            "Calculation: \u20b946,143 - \u20b91,000 = \u20b945,143"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.083469Z"
+        },
+        {
+          "transaction_id": "TXN018",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "BANK_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 500.0,
+          "reason": "Bank credit (\u20b93,322) equals expected settlement (\u20b93,822) minus documented adjustment of \u20b9500.",
+          "evidence": [
+            "Payment captured = \u20b93,900",
+            "Ledger gross = \u20b93,900, fee = \u20b978",
+            "Bank credit (BNK_REF_0018) = \u20b93,322",
+            "Adjustment (BANK_PROCESSING_FEE): \u20b9500 (Standard bank processing fee charge)",
+            "Calculation: \u20b93,822 - \u20b9500 = \u20b93,322"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.084521Z"
+        },
+        {
+          "transaction_id": "TXN035",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b933,884 is \u20b9200 lower than expected settlement (\u20b934,084) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b934,400",
+            "Ledger gross = \u20b934,600, fee = \u20b9516",
+            "Expected settlement = \u20b934,084",
+            "Bank credit = \u20b933,884"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.084521Z"
+        },
+        {
+          "transaction_id": "TXN051",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b927,538 is \u20b90 lower than expected settlement (\u20b927,538) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b928,100",
+            "Ledger gross = \u20b928,100, fee = \u20b9562",
+            "Expected settlement = \u20b927,538",
+            "Bank credit = \u20b927,538"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.085588Z"
+        },
+        {
+          "transaction_id": "TXN072",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Multiple (2) bank settlement records found for single transaction.",
+          "evidence": [
+            "Payment amount = \u20b918,000",
+            "Ledger gross = \u20b918,000, fee = \u20b9360",
+            "Expected settlement = \u20b917,640"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank statement for potential duplicate credit.",
+          "timestamp": "2026-08-23T09:41:58.085588Z"
+        }
+      ]
+    },
+    {
+      "run_number": 3,
+      "run_id": "run_demo_554467a2",
+      "cases_selected": 5,
+      "cases_completed": 5,
+      "cases_not_evaluated": 0,
+      "correct_decisions": 5,
+      "auto_resolved": 2,
+      "auto_resolved_correct": 2,
+      "human_review": 3,
+      "human_review_correct": 3,
+      "ground_truth_auto_resolvable": 2,
+      "decision_accuracy": 100.0,
+      "auto_resolution_precision": 100.0,
+      "auto_resolution_recall": 100.0,
+      "phase2_time_sec": 0.0021,
+      "total_tokens": null,
+      "investigated_cases": [
+        {
+          "transaction_id": "TXN011",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "GROSS_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 200.0,
+          "reason": "Bank credit (\u20b915,520) equals expected settlement (\u20b915,720) minus documented adjustment of \u20b9200.",
+          "evidence": [
+            "Payment captured = \u20b916,000",
+            "Ledger gross = \u20b916,200, fee = \u20b9480",
+            "Bank credit (BNK_REF_0011) = \u20b915,520",
+            "Adjustment (GROSS_INVOICE_ADJUSTMENT): \u20b9200 (Merchant gross amount adjustment reference)",
+            "Calculation: \u20b915,720 - \u20b9200 = \u20b915,520"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.173097Z"
+        },
+        {
+          "transaction_id": "TXN067",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b96,797 is \u20b91,000 lower than expected settlement (\u20b97,797) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b96,900",
+            "Ledger gross = \u20b97,900, fee = \u20b9103",
+            "Expected settlement = \u20b97,797",
+            "Bank credit = \u20b96,797"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.173097Z"
+        },
+        {
+          "transaction_id": "TXN069",
+          "decision": "AUTO_RESOLVED",
+          "exception_type": "BANK_AMOUNT_MISMATCH",
+          "resolution_type": "ADJUSTMENT_EXPLAINED",
+          "resolved_difference": 100.0,
+          "reason": "Bank credit (\u20b936,658) equals expected settlement (\u20b936,758) minus documented adjustment of \u20b9100.",
+          "evidence": [
+            "Payment captured = \u20b937,700",
+            "Ledger gross = \u20b937,700, fee = \u20b9942",
+            "Bank credit (BNK_REF_0068) = \u20b936,658",
+            "Adjustment (SETTLEMENT_ADJUSTMENT): \u20b9100 (Standard settlement adjustment charge)",
+            "Calculation: \u20b936,758 - \u20b9100 = \u20b936,658"
+          ],
+          "confidence": 1.0,
+          "recommended_action": "No action needed; discrepancy fully accounted for by adjustment record.",
+          "timestamp": "2026-08-23T09:41:58.173097Z"
+        },
+        {
+          "transaction_id": "TXN085",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Bank credit of \u20b941,516 is \u20b90 lower than expected settlement (\u20b941,516) with no adjustment record.",
+          "evidence": [
+            "Payment amount = \u20b942,800",
+            "Ledger gross = \u20b942,800, fee = \u20b91,284",
+            "Expected settlement = \u20b941,516",
+            "Bank credit = \u20b941,516"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank settlement details.",
+          "timestamp": "2026-08-23T09:41:58.174161Z"
+        },
+        {
+          "transaction_id": "TXN097",
+          "decision": "HUMAN_REVIEW",
+          "exception_type": "INVESTIGATED_EXCEPTION",
+          "resolution_type": "NONE",
+          "resolved_difference": null,
+          "reason": "Multiple (2) bank settlement records found for single transaction.",
+          "evidence": [
+            "Payment amount = \u20b928,500",
+            "Ledger gross = \u20b928,500, fee = \u20b9570",
+            "Expected settlement = \u20b927,930"
+          ],
+          "confidence": 0.95,
+          "recommended_action": "Review bank statement for potential duplicate credit.",
+          "timestamp": "2026-08-23T09:41:58.174161Z"
+        }
+      ]
+    }
+  ],
+  "aggregate_metrics": {
+    "evaluation_runs_total": 3,
+    "total_selected": 15,
+    "total_completed": 15,
+    "total_not_evaluated": 0,
+    "auto_resolved": 6,
+    "human_review": 9,
+    "decision_accuracy": 100.0,
+    "auto_resolution_precision": 100.0,
+    "auto_resolution_recall": 100.0,
+    "human_review_rate": 60.0,
+    "not_evaluated_rate": 0.0,
+    "total_processing_time_sec": 0.0052,
+    "average_case_latency_sec": 0.0003,
+    "total_tokens": 0,
+    "average_tokens_per_case": 0
+  }
+}

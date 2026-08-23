@@ -15,6 +15,8 @@ project_root = os.path.abspath(os.path.join(current_dir, ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+import src.config  # Loads .env variables
+
 # Set stdout/stderr to UTF-8 on Windows environments
 if sys.stdout.encoding != "utf-8":
     try:

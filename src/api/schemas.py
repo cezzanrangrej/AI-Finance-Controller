@@ -21,6 +21,20 @@ class RunSummaryResponse(BaseModel):
     agent_resolution_rate: float
     final_resolution_rate: float
 
+    # LLM Provider Metadata
+    llm_provider: Optional[str] = "demo"
+    llm_mode: Optional[str] = "DEMO"
+    llm_model: Optional[str] = "demo"
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    llm_cases_selected: Optional[int] = None
+    llm_cases_completed: Optional[int] = None
+    llm_cases_not_evaluated: Optional[int] = None
+    evaluation_group_id: Optional[str] = None
+    evaluation_run_number: Optional[int] = None
+    evaluation_runs_total: Optional[int] = None
+
     # Evaluation metrics
     phase1_accuracy: Optional[float] = None
     phase2_accuracy: Optional[float] = None
@@ -50,6 +64,20 @@ class MetricsResponse(BaseModel):
     agent_resolution_rate: float
     final_resolution_rate: float
 
+    # LLM Provider Metadata
+    llm_provider: Optional[str] = "demo"
+    llm_mode: Optional[str] = "DEMO"
+    llm_model: Optional[str] = "demo"
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    llm_cases_selected: Optional[int] = None
+    llm_cases_completed: Optional[int] = None
+    llm_cases_not_evaluated: Optional[int] = None
+    evaluation_group_id: Optional[str] = None
+    evaluation_run_number: Optional[int] = None
+    evaluation_runs_total: Optional[int] = None
+
     # Evaluation metrics
     phase1_accuracy: Optional[float] = 100.0
     phase2_accuracy: Optional[float] = None
@@ -66,6 +94,55 @@ class MetricsResponse(BaseModel):
     average_time_per_record_sec: Optional[float] = None
 
     exception_breakdown: Dict[str, int]
+
+
+class EvaluationRunRequest(BaseModel):
+    """Request model for initiating a multi-run evaluation."""
+    provider: Optional[str] = "demo"
+    cases_per_run: Optional[int] = 5
+    runs: Optional[int] = 1
+    model: Optional[str] = None
+
+
+class PerRunSummary(BaseModel):
+    """Summary of a single run within an evaluation group."""
+    run_number: int
+    run_id: str
+    cases_selected: int
+    cases_completed: int
+    cases_not_evaluated: int
+    auto_resolved: int
+    human_review: int
+    decision_accuracy: float
+    auto_resolution_precision: float
+    auto_resolution_recall: float
+    phase2_time_sec: float
+    total_tokens: Optional[int] = None
+
+
+class EvaluationGroupSummaryResponse(BaseModel):
+    """Aggregate response model for multi-run evaluations."""
+    evaluation_group_id: str
+    provider: str
+    model: str
+    runs: int
+    cases_per_run: int
+    total_selected: int
+    completed: int
+    not_evaluated: int
+    auto_resolved: int
+    human_review: int
+    aggregate_accuracy: float
+    aggregate_precision: float
+    aggregate_recall: float
+    human_review_rate: float
+    not_evaluated_rate: float
+    total_processing_time_sec: float
+    average_case_latency_sec: float
+    total_tokens: int
+    average_tokens_per_case: int
+    per_run_summaries: List[PerRunSummary]
+
 
 
 class ExceptionItemResponse(BaseModel):

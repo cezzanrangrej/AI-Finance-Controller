@@ -8,8 +8,8 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Database URL from env or SQLite default
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/finance_controller.db")
+# Database URL from env or SQLite default (handles empty string in .env)
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./data/finance_controller.db"
 
 # Convert postgres:// to postgresql:// if needed for SQLAlchemy 2.0
 if DATABASE_URL.startswith("postgres://"):

@@ -1,0 +1,85 @@
+{
+  "project": "AI Finance Controller",
+  "version": "3.1.0",
+  "evaluation_timestamp": "2026-08-23T16:30:00Z",
+  "summary": {
+    "description": "Comprehensive final evaluation summary for the AI Finance Controller platform, covering full deterministic reconciliation, multi-run real-LLM subset evaluations, and controlled individual vs. batch performance benchmarks.",
+    "dataset_total_records": 100,
+    "ground_truth_reconciled": 70,
+    "ground_truth_exceptions": 30,
+    "initial_match_rate_percent": 70.0
+  },
+  "phase1_deterministic_reconciliation": {
+    "total_records_processed": 100,
+    "reconciled_records": 70,
+    "exception_records": 30,
+    "match_rate_percent": 70.0,
+    "accuracy_against_ground_truth_percent": 100.0,
+    "processing_time_sec": 0.003,
+    "throughput_records_per_sec": 33269.64,
+    "exception_breakdown": {
+      "GROSS_AMOUNT_MISMATCH": 9,
+      "BANK_AMOUNT_MISMATCH": 5,
+      "DUPLICATE_BANK_RECORD": 3,
+      "MISSING_LEDGER_RECORD": 5,
+      "MISSING_BANK_RECORD": 5,
+      "LEDGER_CALCULATION_ERROR": 3
+    }
+  },
+  "real_llm_subset_evaluation": {
+    "note": "Metrics reflect evaluated subsets across multiple deterministic runs, not all 30 exceptions simultaneously.",
+    "provider": "OpenRouter",
+    "model": "meta-llama/llama-3.3-70b-instruct",
+    "cases_evaluated": 15,
+    "runs_conducted": 3,
+    "cases_per_run": 5,
+    "decision_accuracy_percent": 100.0,
+    "auto_resolution_precision_percent": 100.0,
+    "auto_resolution_recall_percent": 100.0,
+    "human_review_rate_percent": 60.0,
+    "not_evaluated_count": 0,
+    "cases_auto_resolved": 6,
+    "cases_human_review": 9
+  },
+  "controlled_benchmark_comparison": {
+    "benchmark_scope": "Controlled 5-Case Benchmark (TXN003, TXN008, TXN019, TXN024, TXN037)",
+    "note": "These numbers represent a controlled 5-case benchmark and are not generalized to arbitrary enterprise workloads.",
+    "individual_mode": {
+      "cases_evaluated": 5,
+      "total_latency_sec": 59.6418,
+      "average_latency_per_case_sec": 11.9284,
+      "total_tokens": 28657,
+      "average_tokens_per_case": 5731,
+      "decision_accuracy_percent": 100.0,
+      "auto_resolution_precision_percent": 100.0,
+      "auto_resolution_recall_percent": 100.0,
+      "auto_resolved_count": 2,
+      "human_review_count": 3
+    },
+    "batch_mode": {
+      "cases_evaluated": 5,
+      "batch_size": 5,
+      "total_latency_sec": 11.013,
+      "average_latency_per_case_sec": 2.2026,
+      "total_tokens": 1973,
+      "average_tokens_per_case": 395,
+      "decision_accuracy_percent": 100.0,
+      "auto_resolution_precision_percent": 100.0,
+      "auto_resolution_recall_percent": 100.0,
+      "auto_resolved_count": 2,
+      "human_review_count": 3
+    },
+    "measured_improvements": {
+      "latency_reduction_percent": 81.5,
+      "token_reduction_percent": 93.1
+    }
+  },
+  "verification_suite": {
+    "test_runner": "pytest",
+    "total_automated_tests": 91,
+    "passed_tests": 89,
+    "skipped_tests": 2,
+    "failed_tests": 0,
+    "pass_rate_percent": 100.0
+  }
+}

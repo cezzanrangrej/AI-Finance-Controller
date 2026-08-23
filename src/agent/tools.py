@@ -234,7 +234,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "get_transaction",
-                    "description": "Returns all known records for a transaction across payment, ledger, bank, and adjustments.",
+                    "description": "Returns all known records for a transaction across payment, ledger, bank, and adjustments. Use this as an initial retrieval step.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -248,7 +248,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "get_payment_record",
-                    "description": "Returns the payment gateway record for a transaction.",
+                    "description": "Returns the payment gateway record (amount, merchant, status, date) for a transaction.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -262,7 +262,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "get_ledger_record",
-                    "description": "Returns the internal finance ledger record for a transaction.",
+                    "description": "Returns the internal finance ledger record (gross_amount, fee, net_amount) for a transaction.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -276,7 +276,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "get_bank_records",
-                    "description": "Returns ALL bank statement records for a transaction, including any duplicates.",
+                    "description": "Returns all bank records for the transaction, including duplicates. Use this when investigating missing, duplicate, or mismatched bank entries.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -290,7 +290,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "get_adjustments",
-                    "description": "Returns legitimate settlement adjustment records (e.g. bank fees, adjustments) for a transaction.",
+                    "description": "Retrieve all documented transaction-specific financial adjustments that may explain a mismatch between expected settlement and bank credit, or gross discrepancies. Use this tool for amount discrepancies, especially BANK_AMOUNT_MISMATCH and GROSS_AMOUNT_MISMATCH. Do not assume an adjustment exists; retrieve the records and inspect them.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -304,7 +304,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "calculate_expected_settlement",
-                    "description": "Deterministically calculates the base bank settlement amount using gross_amount - fee.",
+                    "description": "Deterministically calculates base expected settlement amount (gross_amount - fee). This tool performs authoritative arithmetic. Do not calculate the result yourself.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -318,7 +318,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "calculate_adjusted_expected_settlement",
-                    "description": "Deterministically calculates expected bank settlement considering fee and total adjustments.",
+                    "description": "Deterministically calculates the expected bank credit after applying the documented ledger fee and transaction-specific adjustments. Use this tool after retrieving adjustments. This tool performs authoritative arithmetic. Do not calculate the result yourself.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -332,7 +332,7 @@ class FinancialToolkit:
                 "type": "function",
                 "function": {
                     "name": "check_for_duplicates",
-                    "description": "Checks whether multiple bank records exist for the same transaction ID.",
+                    "description": "Checks whether multiple bank records exist for the transaction ID. Use this when a transaction may have duplicate bank records.",
                     "parameters": {
                         "type": "object",
                         "properties": {

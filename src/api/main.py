@@ -18,7 +18,9 @@ _project_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from src.api.routes import audit, exceptions, metrics, runs, transactions
+import src.config  # Loads .env variables
+
+from src.api.routes import audit, evaluations, exceptions, metrics, runs, transactions
 from src.db.database import init_db
 
 
@@ -52,6 +54,8 @@ app.include_router(metrics.router)
 app.include_router(exceptions.router)
 app.include_router(transactions.router)
 app.include_router(audit.router)
+app.include_router(evaluations.router)
+
 
 
 @app.get("/api/health")

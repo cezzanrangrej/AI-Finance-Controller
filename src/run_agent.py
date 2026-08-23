@@ -29,12 +29,7 @@ if sys.stdout.encoding != "utf-8":
     except AttributeError:
         pass
 
-# Load .env if present
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+import src.config  # Loads .env variables
 
 from src.generator import SyntheticDataGenerator
 from src.reconciliation import ReconciliationEngine

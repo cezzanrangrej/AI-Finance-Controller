@@ -1,0 +1,9 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TXN003,SETTLEMENT_ADJUSTMENT,100,Standard settlement adjustment charge,2026-08-05,ADJ001
+TXN008,GROSS_INVOICE_ADJUSTMENT,1000,Merchant gross amount adjustment reference,2026-08-03,ADJ002
+TXN010,GROSS_INVOICE_ADJUSTMENT,1000,Merchant gross amount adjustment reference,2026-08-22,ADJ003
+TXN011,GROSS_INVOICE_ADJUSTMENT,200,Merchant gross amount adjustment reference,2026-08-04,ADJ004
+TXN015,GROSS_INVOICE_ADJUSTMENT,1000,Merchant gross amount adjustment reference,2026-08-12,ADJ005
+TXN018,BANK_PROCESSING_FEE,500,Standard bank processing fee charge,2026-08-08,ADJ006
+TXN069,SETTLEMENT_ADJUSTMENT,100,Standard settlement adjustment charge,2026-08-07,ADJ007
+TXN074,BANK_PROCESSING_FEE,100,Standard bank processing fee charge,2026-08-23,ADJ008
