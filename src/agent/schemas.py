@@ -61,6 +61,52 @@ class ToolCallTrace(BaseModel):
 
 
 
+class InvestigationProposal(BaseModel):
+    """
+    Structured proposal produced by the Investigator Agent.
+    Contains gathered evidence and a recommended resolution without chain-of-thought.
+    """
+    transaction_id: str
+    exception_type: str
+    evidence: List[str] = Field(default_factory=list)
+    proposed_resolution: Literal["AUTO_RESOLVED", "HUMAN_REVIEW"]
+    resolution_type: Optional[Literal["NONE", "ADJUSTMENT_EXPLAINED", "OTHER_EVIDENCE"]] = "NONE"
+    resolved_difference: Optional[float] = None
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    unresolved_questions: List[str] = Field(default_factory=list)
+    tool_history: List[str] = Field(default_factory=list)
+    reason: Optional[str] = None
+    recommended_action: Optional[str] = None
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_must_be_in_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {v}")
+        return v
+
+
+class VerificationResult(BaseModel):
+    """
+    Structured verification produced by the Verifier Agent.
+    Independently validates whether evidence supports the proposed resolution.
+    """
+    transaction_id: str
+    verified: bool
+    decision: Literal["AUTO_RESOLVED", "HUMAN_REVIEW"]
+    reason: str
+    evidence_references: List[str] = Field(default_factory=list)
+    contradictions: List[str] = Field(default_factory=list)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_must_be_in_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {v}")
+        return v
+
+
 class InvestigationLog(BaseModel):
     """Full audit record for a single exception investigation."""
 
@@ -77,6 +123,16 @@ class InvestigationLog(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tool_call_count: int = 0
     tool_traces: List[ToolCallTrace] = Field(default_factory=list)
+
+    # Multi-Agent Audit Fields
+    agent_mode: Optional[str] = "INDIVIDUAL"
+    resolution_source: Optional[str] = None  # e.g., "DETERMINISTIC_EVIDENCE", "MULTI_AGENT_CONSENSUS", "HUMAN_ESCALATION"
+    investigator_proposal: Optional[Dict[str, Any]] = None
+    verification_result: Optional[Dict[str, Any]] = None
+    disagreement_detected: Optional[bool] = False
+    investigator_calls: int = 0
+    verifier_calls: int = 0
+    model_interactions: int = 1
 
 
 
@@ -142,5 +198,29 @@ class BatchInvestigationLog(BaseModel):
     fallback_count: int = 0
     fallback_transaction_ids: List[str] = Field(default_factory=list)
     decisions: List[AgentDecision] = Field(default_factory=list)
+    partition_strategy: str = "balanced_exception_type"
+    exception_type_counts: Dict[str, int] = Field(default_factory=dict)
+    case_count: Optional[int] = None
+
+
+class BatchStatus(BaseModel):
+    """Per-batch execution lifecycle status, timing, and error tracking."""
+    batch_id: str
+    batch_number: int
+    transaction_ids: List[str]
+    status: Literal["PENDING", "RUNNING", "COMPLETED", "FAILED", "NOT_EVALUATED"]
+    batch_started_at: Optional[datetime] = None
+    batch_completed_at: Optional[datetime] = None
+    batch_latency_sec: Optional[float] = None
+    batch_error: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    partition_strategy: str = "balanced_exception_type"
+    case_count: Optional[int] = None
+    exception_type_counts: Dict[str, int] = Field(default_factory=dict)
+
 
 

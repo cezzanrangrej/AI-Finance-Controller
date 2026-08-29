@@ -164,3 +164,38 @@ def test_ground_truth_accuracy():
         assert result["status"] == gt["expected_status"], f"Status mismatch on {txn_id}"
         assert result["reason"] == gt["expected_exception"], f"Exception reason mismatch on {txn_id}"
 
+
+def test_test_dataset_02_reconciliation():
+    """Test 10: Verify test_dataset_02 batch reconciliation and ground truth integrity."""
+    dataset_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "test_dataset_02")
+    p_path = os.path.join(dataset_dir, "payments.csv")
+    l_path = os.path.join(dataset_dir, "ledger.csv")
+    b_path = os.path.join(dataset_dir, "bank.csv")
+    gt_path = os.path.join(dataset_dir, "ground_truth.csv")
+
+    assert os.path.exists(p_path)
+    assert os.path.exists(l_path)
+    assert os.path.exists(b_path)
+    assert os.path.exists(gt_path)
+
+    results, metrics = ReconciliationEngine.reconcile_batch(p_path, l_path, b_path)
+    gt_rows = ReconciliationEngine.load_csv(gt_path)
+    gt_index = {row["transaction_id"]: row for row in gt_rows}
+
+    assert metrics["total_records"] == 100
+    assert metrics["reconciled_records"] == 55
+    assert metrics["exception_records"] == 45
+    assert metrics["breakdown"]["GROSS_AMOUNT_MISMATCH"] == 12
+    assert metrics["breakdown"]["MISSING_LEDGER_RECORD"] == 8
+    assert metrics["breakdown"]["MISSING_BANK_RECORD"] == 7
+    assert metrics["breakdown"]["BANK_AMOUNT_MISMATCH"] == 9
+    assert metrics["breakdown"]["DUPLICATE_BANK_RECORD"] == 5
+    assert metrics["breakdown"]["LEDGER_CALCULATION_ERROR"] == 4
+
+    for r in results:
+        txn_id = r["transaction_id"]
+        gt = gt_index[txn_id]
+        assert r["status"] == gt["expected_phase1_status"]
+        assert r["reason"] == (gt["expected_phase1_exception"] if gt["expected_phase1_exception"] else None)
+
+

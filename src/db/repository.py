@@ -23,9 +23,10 @@ class FinanceRepository:
 
     @staticmethod
     def save_transaction_results(db: Session, run_id: str, results: List[Dict[str, Any]]) -> None:
-        """Bulk inserts Phase 1 transaction results."""
+        """Bulk inserts Phase 1 transaction results with provenance."""
         objects = []
         for r in results:
+            prov_json = json.dumps(r.get("source_provenance")) if r.get("source_provenance") else None
             objects.append(
                 TransactionResultModel(
                     run_id=run_id,
@@ -38,6 +39,7 @@ class FinanceRepository:
                     expected_net_amount=r.get("expected_net_amount"),
                     bank_amount=r.get("bank_amount"),
                     difference=r.get("difference"),
+                    source_provenance_json=prov_json,
                 )
             )
         db.bulk_save_objects(objects)
@@ -48,12 +50,13 @@ class FinanceRepository:
         """Bulk inserts source adjustment records."""
         objects = []
         for adj in adjustments:
+            amt = float(adj["amount"]) if adj.get("amount") is not None else 0.0
             objects.append(
                 AdjustmentModel(
                     run_id=run_id,
                     transaction_id=adj["transaction_id"],
                     adjustment_type=adj["adjustment_type"],
-                    amount=int(adj["amount"]),
+                    amount=amt,
                     reason=adj["reason"],
                     date=adj.get("date"),
                     reference=adj.get("reference"),
@@ -160,6 +163,13 @@ class FinanceRepository:
                 "created_at": investigation.created_at.isoformat(),
             }
 
+        prov_data = None
+        if getattr(txn, "source_provenance_json", None):
+            try:
+                prov_data = json.loads(txn.source_provenance_json)
+            except Exception:
+                prov_data = None
+
         return {
             "transaction_id": txn.transaction_id,
             "status": txn.status,
@@ -172,6 +182,7 @@ class FinanceRepository:
             "difference": txn.difference,
             "adjustments": adjustments_data,
             "agent_investigation": inv_data,
+            "source_provenance": prov_data,
         }
 
     @staticmethod

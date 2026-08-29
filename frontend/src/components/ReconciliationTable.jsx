@@ -1,5 +1,15 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, ChevronRight, CheckCircle2, AlertCircle, Bot, ShieldAlert } from 'lucide-react';
+import { Search, Filter, ChevronRight, CheckCircle2, AlertTriangle, ArrowUpRight, Download, FileSpreadsheet, FileText, Printer } from 'lucide-react';
+
+const formatMoney = (val) => {
+  if (val === null || val === undefined || val === '') return '—';
+  const num = Number(val);
+  if (isNaN(num)) return String(val);
+  return num.toLocaleString('en-IN', {
+    minimumFractionDigits: num % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+};
 
 export default function ReconciliationTable({ transactions, exceptions, onSelectTransaction }) {
   const [activeTab, setActiveTab] = useState('ALL'); // ALL, RECONCILED, AUTO_RESOLVED, HUMAN_REVIEW
@@ -24,12 +34,27 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
         decision = exc?.decision || 'HUMAN_REVIEW';
       }
 
+      const gtDecision = exc?.ground_truth_decision || exc?.expected_phase2_decision || t?.ground_truth_decision || t?.expected_phase2_decision;
+      let matchStatus = null;
+      if (gtDecision && decision !== 'N/A') {
+        if (decision === 'NOT_EVALUATED') {
+          matchStatus = 'NOT_EVALUATED';
+        } else if (decision === gtDecision) {
+          matchStatus = 'MATCH';
+        } else {
+          matchStatus = 'MISMATCH';
+        }
+      }
+
       return {
         transaction_id: t.transaction_id,
         status: t.status,
         exception_type: t.exception_type || 'None',
         decision: decision,
-        amount: t.payment_amount || t.gross_amount || 0,
+        ground_truth_decision: gtDecision,
+        match_status: matchStatus,
+        payment_amount: t.payment_amount ?? t.gross_amount ?? 0,
+        bank_amount: t.bank_amount,
         difference: t.difference,
         confidence: exc?.confidence ?? (isReconciled ? 1.0 : 0.0),
         reason: exc?.reason || (isReconciled ? 'Reconciled successfully' : 'Pending review'),
@@ -77,48 +102,271 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
     { key: 'ALL', label: 'All Transactions', count: unifiedItems.length },
     { key: 'RECONCILED', label: 'Reconciled', count: unifiedItems.filter((i) => i.status === 'RECONCILED').length },
     { key: 'AUTO_RESOLVED', label: 'Auto-Resolved', count: unifiedItems.filter((i) => i.decision === 'AUTO_RESOLVED').length },
-    { key: 'HUMAN_REVIEW', label: 'Needs Human Review', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW').length },
+    { key: 'HUMAN_REVIEW', label: 'Needs Attention', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW').length },
   ];
 
-  return (
-    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-sm backdrop-blur-sm overflow-hidden">
-      {/* Table Header & Controls */}
-      <div className="p-6 border-b border-slate-800 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-100">Reconciliation Ledger & Decisions</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Filter, search, and inspect individual transaction decisions</p>
-          </div>
+  const handleDownloadCSV = () => {
+    const dataToExport = filteredData.length > 0 ? filteredData : unifiedItems;
+    if (dataToExport.length === 0) return;
 
-          {/* Search Input */}
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
-            <input
-              type="text"
-              placeholder="Search TXN ID, exception..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500 transition-colors"
-            />
+    const headers = [
+      'Transaction ID',
+      'Status',
+      'Exception Type',
+      'Payment Amount (₹)',
+      'Gross Amount (₹)',
+      'Fee (₹)',
+      'Expected Net (₹)',
+      'Bank Amount (₹)',
+      'Difference (₹)',
+      'AI Decision',
+      'Confidence (%)',
+      'Audit Reason',
+    ];
+
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = dataToExport.map((item) => {
+      const raw = item.raw || {};
+      return [
+        escapeCsv(item.transaction_id),
+        escapeCsv(item.status),
+        escapeCsv(item.exception_type),
+        escapeCsv(item.payment_amount ?? ''),
+        escapeCsv(raw.gross_amount ?? ''),
+        escapeCsv(raw.fee ?? ''),
+        escapeCsv(raw.expected_net_amount ?? ''),
+        escapeCsv(item.bank_amount ?? ''),
+        escapeCsv(item.difference ?? 0),
+        escapeCsv(item.decision),
+        escapeCsv(item.confidence ? `${(item.confidence * 100).toFixed(0)}%` : ''),
+        escapeCsv(item.reason),
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `reconciliation_ledger_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPDF = () => {
+    const dataToExport = filteredData.length > 0 ? filteredData : unifiedItems;
+    if (dataToExport.length === 0) return;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow popups to generate and download the PDF report.');
+      return;
+    }
+
+    const totalCount = dataToExport.length;
+    const reconciledCount = dataToExport.filter((i) => i.status === 'RECONCILED').length;
+    const autoResolvedCount = dataToExport.filter((i) => i.decision === 'AUTO_RESOLVED').length;
+    const reviewCount = dataToExport.filter((i) => i.decision === 'HUMAN_REVIEW').length;
+
+    const rowsHtml = dataToExport
+      .map(
+        (item, idx) => `
+      <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; border-bottom: 1px solid #e2e8f0;">
+        <td style="padding: 8px 10px; font-family: monospace; font-weight: 600; font-size: 11px;">${item.transaction_id}</td>
+        <td style="padding: 8px 10px; text-align: center;">
+          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: ${
+            item.status === 'RECONCILED' ? '#ecfdf5; color: #065f46;' : '#fffbeb; color: #92400e;'
+          }">${item.status}</span>
+        </td>
+        <td style="padding: 8px 10px; font-size: 11px; color: #475569;">${item.exception_type}</td>
+        <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px;">₹${formatMoney(item.payment_amount)}</td>
+        <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px;">₹${formatMoney(item.bank_amount)}</td>
+        <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px; color: ${
+          item.difference ? '#b45309; font-weight: 600;' : '#64748b;'
+        }">₹${formatMoney(item.difference)}</td>
+        <td style="padding: 8px 10px; text-align: center;">
+          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; ${
+            item.decision === 'AUTO_RESOLVED'
+              ? 'background: #ecfdf5; color: #065f46;'
+              : item.decision === 'HUMAN_REVIEW'
+              ? 'background: #fef2f2; color: #991b1b;'
+              : 'color: #64748b;'
+          }">${item.decision}</span>
+        </td>
+        <td style="padding: 8px 10px; font-size: 11px; color: #334155;">${item.reason || '—'}</td>
+      </tr>`
+      )
+      .join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Reconciliation Ledger - ${new Date().toLocaleDateString()}</title>
+        <style>
+          @page { size: landscape; margin: 12mm; }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 16px; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 14px; }
+          .title { font-size: 18px; font-weight: 700; margin: 0; color: #0f172a; }
+          .subtitle { font-size: 11px; color: #64748b; margin-top: 3px; }
+          .meta { text-align: right; font-size: 10px; color: #64748b; }
+          .kpis { display: flex; gap: 10px; margin-bottom: 14px; }
+          .kpi-card { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; }
+          .kpi-label { font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 600; }
+          .kpi-val { font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          th { background: #0f172a; color: #ffffff; text-align: left; padding: 8px 10px; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+          th.right { text-align: right; }
+          th.center { text-align: center; }
+          .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+          @media print {
+            body { padding: 0; }
+            .no-print { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1 class="title">AI Finance Controller</h1>
+            <p class="subtitle">Reconciliation Ledger & Financial Audit Report</p>
+          </div>
+          <div class="meta">
+            <div><strong>Generated:</strong> ${new Date().toLocaleString()}</div>
+            <div><strong>Records Included:</strong> ${totalCount}</div>
           </div>
         </div>
 
-        {/* Filter Tabs & Dropdown */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+        <div class="kpis">
+          <div class="kpi-card">
+            <div class="kpi-label">Total Transactions</div>
+            <div class="kpi-val">${totalCount}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Reconciled</div>
+            <div class="kpi-val" style="color: #059669;">${reconciledCount}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">AI Auto-Resolved</div>
+            <div class="kpi-val" style="color: #0284c7;">${autoResolvedCount}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Needs Attention</div>
+            <div class="kpi-val" style="color: #d97706;">${reviewCount}</div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Txn ID</th>
+              <th class="center">Status</th>
+              <th>Exception Category</th>
+              <th class="right">Payment (₹)</th>
+              <th class="right">Bank Credit (₹)</th>
+              <th class="right">Difference (₹)</th>
+              <th class="center">AI Decision</th>
+              <th>Audit Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+
+        <div class="footer">
+          Generated automatically by AI Finance Controller • Complete Multi-Source Audit Trail
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 shadow-xs overflow-hidden">
+      {/* Table Header & Controls */}
+      <div className="p-6 border-b border-slate-200 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">
+              Reconciliation Ledger
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Multi-source record matching, discrepancy calculations, and agent investigation status
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            {/* Search Input */}
+            <div className="relative w-full sm:w-60">
+              <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search transactions..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+              />
+            </div>
+
+            {/* Export Actions */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleDownloadCSV}
+                title="Download Reconciliation Ledger as CSV"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 transition-colors shadow-2xs"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                <span>CSV</span>
+              </button>
+
+              <button
+                onClick={handleDownloadPDF}
+                title="Download / Print Reconciliation Ledger as PDF"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 transition-colors shadow-2xs"
+              >
+                <FileText className="h-3.5 w-3.5 text-rose-600" />
+                <span>PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter Tabs & Category Selector */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
           {/* Tabs */}
-          <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                   activeTab === tab.key
-                    ? 'bg-slate-800 text-white shadow-sm font-semibold'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 {tab.label}
-                <span className="ml-1.5 font-mono text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-700/50">
+                <span className="ml-1.5 font-mono text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700">
                   {tab.count}
                 </span>
               </button>
@@ -126,16 +374,16 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
           </div>
 
           {/* Category Dropdown */}
-          <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl text-xs">
-            <Filter className="h-3.5 w-3.5 text-slate-500" />
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
+            <Filter className="h-3 w-3 text-slate-400" />
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="bg-transparent text-slate-300 font-medium outline-none cursor-pointer"
+              className="bg-transparent text-slate-700 font-medium outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-slate-900 text-slate-200">All Exceptions</option>
+              <option value="ALL" className="bg-white text-slate-900">All Exception Types</option>
               {categories.map((cat) => (
-                <option key={cat} value={cat} className="bg-slate-900 text-slate-200">
+                <option key={cat} value={cat} className="bg-white text-slate-900">
                   {cat.replace(/_/g, ' ')}
                 </option>
               ))}
@@ -148,21 +396,24 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
-            <tr className="border-b border-slate-800 bg-slate-950/50 text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
-              <th className="py-3.5 px-6">Transaction ID</th>
-              <th className="py-3.5 px-4">Initial Status</th>
-              <th className="py-3.5 px-4">Exception Category</th>
-              <th className="py-3.5 px-4">AI Decision</th>
-              <th className="py-3.5 px-4 text-right">Amount</th>
-              <th className="py-3.5 px-4 text-right">Difference</th>
-              <th className="py-3.5 px-4 text-center">Confidence</th>
-              <th className="py-3.5 px-6 text-right">Action</th>
+            <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 font-semibold text-[11px] uppercase tracking-wider">
+              <th className="py-3 px-5">Transaction</th>
+              <th className="py-3 px-4">Status</th>
+              <th className="py-3 px-4">Exception</th>
+              <th className="py-3 px-4 text-right">Payment</th>
+              <th className="py-3 px-4 text-right">Bank</th>
+              <th className="py-3 px-4 text-right">Difference</th>
+              <th className="py-3 px-4 text-center">AI Decision</th>
+              <th className="py-3 px-4 text-center">Ground Truth</th>
+              <th className="py-3 px-4 text-center">Eval Match</th>
+              <th className="py-3 px-4 text-center">Confidence</th>
+              <th className="py-3 px-5 text-right">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/60 font-medium text-slate-300">
+          <tbody className="divide-y divide-slate-100 font-normal text-slate-600">
             {filteredData.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-slate-500 font-medium">
+                <td colSpan={11} className="py-10 text-center text-slate-400 font-medium">
                   No matching transaction records found.
                 </td>
               </tr>
@@ -171,63 +422,117 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
                 <tr
                   key={item.transaction_id}
                   onClick={() => onSelectTransaction(item.transaction_id)}
-                  className="hover:bg-slate-800/40 cursor-pointer transition-colors group"
+                  className="hover:bg-slate-50 cursor-pointer transition-colors group"
                 >
-                  <td className="py-3.5 px-6 font-mono font-bold text-slate-100 group-hover:text-indigo-400 transition-colors">
+                  {/* Transaction ID */}
+                  <td className="py-3 px-5 font-mono font-semibold text-slate-900 group-hover:text-emerald-600 transition-colors">
                     {item.transaction_id}
                   </td>
-                  <td className="py-3.5 px-4">
+
+                  {/* Status chip */}
+                  <td className="py-3 px-4">
                     {item.status === 'RECONCILED' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <CheckCircle2 className="h-3 w-3" /> RECONCILED
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono text-slate-600 bg-slate-100 border border-slate-200">
+                        RECONCILED
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <AlertCircle className="h-3 w-3" /> EXCEPTION
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono text-amber-800 bg-amber-50 border border-amber-200">
+                        EXCEPTION
                       </span>
                     )}
                   </td>
-                  <td className="py-3.5 px-4 font-mono text-[11px] text-slate-400">
-                    {item.exception_type !== 'None' ? item.exception_type : '-'}
+
+                  {/* Exception Category */}
+                  <td className="py-3 px-4 font-mono text-[11px] text-slate-500">
+                    {item.exception_type !== 'None' ? item.exception_type : '—'}
                   </td>
-                  <td className="py-3.5 px-4">
+
+                  {/* Payment Amount */}
+                  <td className="py-3 px-4 text-right font-mono font-medium text-slate-900">
+                    {item.payment_amount != null ? `₹${formatMoney(item.payment_amount)}` : '—'}
+                  </td>
+
+                  {/* Bank Amount */}
+                  <td className="py-3 px-4 text-right font-mono text-slate-700">
+                    {item.bank_amount != null ? `₹${formatMoney(item.bank_amount)}` : '—'}
+                  </td>
+
+                  {/* Difference */}
+                  <td className="py-3 px-4 text-right font-mono">
+                    {item.difference != null && Number(item.difference) !== 0 ? (
+                      <span className="text-amber-600 font-medium">
+                        ₹{formatMoney(item.difference)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">₹0</span>
+                    )}
+                  </td>
+
+                  {/* AI Decision */}
+                  <td className="py-3 px-4 text-center">
                     {item.decision === 'AUTO_RESOLVED' && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                        <Bot className="h-3 w-3" /> AUTO RESOLVED
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200">
+                        AUTO-RESOLVED
                       </span>
                     )}
                     {item.decision === 'HUMAN_REVIEW' && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <ShieldAlert className="h-3 w-3" /> HUMAN REVIEW
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold text-amber-800 bg-amber-50 border border-amber-200">
+                        HUMAN REVIEW
+                      </span>
+                    )}
+                    {item.decision === 'NOT_EVALUATED' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold text-slate-700 bg-slate-100 border border-slate-300">
+                        NOT EVALUATED
                       </span>
                     )}
                     {item.decision === 'N/A' && (
-                      <span className="text-slate-500 text-[11px]">N/A</span>
+                      <span className="text-slate-400 text-[11px] font-mono">—</span>
                     )}
                   </td>
-                  <td className="py-3.5 px-4 text-right font-mono text-slate-200">
-                    ₹{item.amount.toLocaleString()}
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-mono">
-                    {item.difference != null && item.difference !== 0 ? (
-                      <span className={item.difference > 0 ? 'text-amber-400' : 'text-purple-400'}>
-                        ₹{item.difference.toLocaleString()}
-                      </span>
+
+                  {/* Ground Truth */}
+                  <td className="py-3 px-4 text-center font-mono text-[11px]">
+                    {item.ground_truth_decision ? (
+                      <span className="text-slate-700 font-medium">{item.ground_truth_decision}</span>
                     ) : (
-                      <span className="text-slate-500">₹0</span>
+                      <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td className="py-3.5 px-4 text-center font-mono text-xs">
+
+                  {/* Ground Truth Evaluation Match */}
+                  <td className="py-3 px-4 text-center font-mono text-[10px]">
+                    {item.match_status === 'MATCH' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-emerald-800 bg-emerald-100 border border-emerald-200">
+                        ✓ MATCH
+                      </span>
+                    )}
+                    {item.match_status === 'MISMATCH' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-rose-800 bg-rose-100 border border-rose-200">
+                        ✗ MISMATCH
+                      </span>
+                    )}
+                    {item.match_status === 'NOT_EVALUATED' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-amber-800 bg-amber-100 border border-amber-200">
+                        ! UNTESTED
+                      </span>
+                    )}
+                    {!item.match_status && <span className="text-slate-400">—</span>}
+                  </td>
+
+                  {/* Confidence */}
+                  <td className="py-3 px-4 text-center font-mono text-[11px]">
                     {item.decision !== 'N/A' ? (
-                      <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+                      <span className="text-slate-900 font-medium">
                         {(item.confidence * 100).toFixed(0)}%
                       </span>
                     ) : (
-                      <span className="text-slate-600">-</span>
+                      <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td className="py-3.5 px-6 text-right text-indigo-400">
-                    <ChevronRight className="h-4 w-4 ml-auto transition-transform group-hover:translate-x-1" />
+
+                  {/* Action */}
+                  <td className="py-3 px-5 text-right text-slate-400 group-hover:text-emerald-600 transition-colors">
+                    <ChevronRight className="h-4 w-4 ml-auto" />
                   </td>
                 </tr>
               ))
@@ -236,9 +541,10 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
         </table>
       </div>
 
-      <div className="p-4 border-t border-slate-800 bg-slate-950/40 text-xs text-slate-500 flex justify-between items-center">
-        <span>Showing {filteredData.length} of {unifiedItems.length} records</span>
-        <span>Click any row for multi-source detail & AI audit trail</span>
+      {/* Table Footer */}
+      <div className="p-4 border-t border-slate-200 bg-slate-50 text-xs text-slate-500 flex flex-col sm:flex-row justify-between items-center gap-2">
+        <span>Showing {filteredData.length} of {unifiedItems.length} transactions</span>
+        <span className="text-[11px] font-mono text-slate-500">Click any row to inspect multi-source evidence</span>
       </div>
     </div>
   );

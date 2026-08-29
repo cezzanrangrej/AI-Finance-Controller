@@ -28,17 +28,7 @@ if sys.stdout.encoding != "utf-8":
 
 from src.generator import SyntheticDataGenerator
 from src.reconciliation import ReconciliationEngine
-
-
-def format_currency(val: Any) -> str:
-    """Format an integer/float amount as Indian Rupee string."""
-    if val is None:
-        return "N/A"
-    try:
-        # Standard thousands comma separation
-        return f"₹{val:,.0f}" if isinstance(val, (int, float)) else str(val)
-    except Exception:
-        return str(val)
+from src.utils.formatters import format_currency
 
 
 def print_reconciliation_report(results: List[Dict[str, Any]], metrics: Dict[str, Any]) -> None:

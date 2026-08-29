@@ -44,6 +44,7 @@ from src.db.database import SessionLocal, init_db
 from src.db.repository import FinanceRepository
 from src.generator import SyntheticDataGenerator
 from src.reconciliation import ReconciliationEngine
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 def run_evaluation(
@@ -51,27 +52,18 @@ def run_evaluation(
     cases: int = 5,
     runs: int = 1,
     batch_size: int = 5,
+    parallel_batches: Optional[int] = None,
     mode: str = "batch",
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     resume_group_id: Optional[str] = None,
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    trace: Optional[bool] = None,
+    parallel_benchmark: bool = False,
 ) -> Dict[str, Any]:
     """
     Executes single or multi-run subset evaluation for the specified LLM provider,
-    supporting INDIVIDUAL, BATCH, and COMPARE investigation modes.
-
-    Args:
-        provider: 'openrouter', 'gemini', or 'demo'. Defaults to LLM_PROVIDER or 'openrouter'.
-        cases: Number of Phase 1 exceptions to evaluate per run (default: 5).
-        runs: Number of evaluation runs to execute (default: 1).
-        batch_size: Number of cases per batch in BATCH mode (default: 5, range: 1-10).
-        mode: 'individual', 'batch', or 'compare' (default: 'batch').
-        model: Optional model override.
-        api_key: Optional API key override.
-        resume_group_id: Optional group ID to resume unfinished runs.
-
-    Returns:
-        Dictionary containing aggregate evaluation summary metrics and per-run results.
+    supporting INDIVIDUAL, BATCH, COMPARE, and MULTI-AGENT investigation modes, with streaming event callbacks.
     """
     if cases < 1:
         raise ValueError(f"cases must be >= 1, got {cases}")
@@ -79,8 +71,11 @@ def run_evaluation(
         raise ValueError(f"runs must be >= 1, got {runs}")
     if batch_size < 1 or batch_size > 10:
         raise ValueError(f"batch_size must be between 1 and 10, got {batch_size}")
-    if mode not in ("individual", "batch", "compare"):
-        raise ValueError(f"mode must be 'individual', 'batch', or 'compare', got '{mode}'")
+    if parallel_batches is not None:
+        if parallel_batches < 1 or parallel_batches > 5:
+            raise ValueError(f"parallel_batches must be between 1 and 5, got {parallel_batches}")
+    if mode not in ("individual", "batch", "compare", "multi-agent"):
+        raise ValueError(f"mode must be 'individual', 'batch', 'compare', or 'multi-agent', got '{mode}'")
 
 
     selected_provider = (
@@ -144,14 +139,34 @@ def run_evaluation(
     payments, ledger, bank, adjustments, ground_truth = generator.generate()
 
     # Step 1: Phase 1 Deterministic Reconciliation over ALL 100 records
+    if event_callback:
+        event_callback({
+            "event": "phase1_started",
+            "evaluation_group_id": resume_group_id or "",
+            "timestamp": time.time(),
+        })
+
     t_p1_start = time.time()
     phase1_results, phase1_metrics = ReconciliationEngine.reconcile_batch(p_path, l_path, b_path)
     t_p1_end = time.time()
     phase1_time_sec = max(t_p1_end - t_p1_start, 0.001)
 
+    t_exc_start = time.time()
     all_exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
     reconciled_count = phase1_metrics["reconciled_records"]
     exception_count = phase1_metrics["exception_records"]
+    t_exc_end = time.time()
+
+    if event_callback:
+        event_callback({
+            "event": "phase1_completed",
+            "evaluation_group_id": resume_group_id or "",
+            "total_records": len(phase1_results),
+            "reconciled_records": reconciled_count,
+            "exception_records": exception_count,
+            "phase1_time_sec": phase1_time_sec,
+            "timestamp": time.time(),
+        })
 
     # Step 2: Strict Total-Case Safety Validation & Deterministic Partitioning
     total_requested_cases = cases * runs
@@ -203,15 +218,45 @@ def run_evaluation(
         print()
     print("========================================\n")
 
+    t_eval_start = time.time()
+    time_to_first_batch_sec: Optional[float] = None
+    all_batch_latencies: List[float] = []
+
+    if event_callback:
+        event_callback({
+            "event": "run_started",
+            "evaluation_group_id": evaluation_group_id,
+            "provider": selected_provider,
+            "model": client_model,
+            "mode": mode,
+            "total_runs": runs,
+            "cases_per_run": cases,
+            "total_cases": total_requested_cases,
+            "batch_size": batch_size if mode in ("batch", "compare") else 1,
+            "timestamp": time.time(),
+        })
+
+    from src.agent.trace import AgentTracer, parse_bool_env
+    trace_enabled = trace if trace is not None else parse_bool_env("SHOW_AGENT_TRACE", False)
+    tracer = AgentTracer(enabled=trace_enabled)
+
+    if tracer.enabled:
+        tracer.header("AI FINANCE CONTROLLER — MULTI-AGENT TRACE" if mode == "multi-agent" else "AI FINANCE CONTROLLER — LIVE TRACE")
+
     # Helper to execute a set of cases under a given mode
-    def execute_eval_mode(eval_mode: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any], int, int, int]:
+    def execute_eval_mode(eval_mode: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any], int, int, int, Optional[float]]:
+        nonlocal time_to_first_batch_sec, all_batch_latencies
         llm_client = LLMClient(provider=selected_provider, api_key=api_key, model=client_model)
         toolkit = FinancialToolkit(payments, ledger, bank, adjustments)
-        agent = AgentController(toolkit=toolkit, llm_client=llm_client)
-        batch_agent = BatchAgentController(toolkit=toolkit, llm_client=llm_client)
+        agent = AgentController(toolkit=toolkit, llm_client=llm_client, tracer=tracer)
+        batch_agent = BatchAgentController(toolkit=toolkit, llm_client=llm_client, tracer=tracer)
+        
+        from src.agent.multi_agent.orchestrator import MultiAgentOrchestrator
+        multi_agent = MultiAgentOrchestrator(toolkit=toolkit, provider=selected_provider, api_key=api_key, tracer=tracer)
 
         completed_run_numbers = set()
         existing_results = []
+        partial_decisions_map = {}
         file_suffix = f"_{eval_mode}" if mode == "compare" else ""
         resume_file = os.path.join(eval_dir, f"{evaluation_group_id}{file_suffix}.json")
         if resume_group_id and os.path.exists(resume_file):
@@ -221,9 +266,20 @@ def run_evaluation(
                     existing_results = saved_data.get("results", [])
                     completed_run_numbers = {r["run_number"] for r in existing_results}
                     print(f"[Resume] Found {len(completed_run_numbers)} previously completed runs in group '{evaluation_group_id}{file_suffix}'.\n")
+                    if saved_data.get("status") == "RUNNING" and "partial_results" in saved_data:
+                        partial_run_num = saved_data.get("current_run_number")
+                        if partial_run_num:
+                            raw_decisions = saved_data.get("partial_results", [])
+                            parsed_decs = []
+                            for d_dict in raw_decisions:
+                                try:
+                                    parsed_decs.append(AgentDecision.model_validate(d_dict))
+                                except Exception:
+                                    pass
+                            partial_decisions_map[partial_run_num] = parsed_decs
+                            print(f"[Resume] Found {len(parsed_decs)} partial decisions for Run {partial_run_num}.\n")
             except Exception as e:
                 print(f"[Resume] Warning: Could not parse {resume_file}: {e}")
-
 
         per_run_sums: List[Dict[str, Any]] = list(existing_results)
         total_batches_processed = 0
@@ -250,51 +306,276 @@ def run_evaluation(
             cases_not_evaluated = 0
 
             if eval_mode == "batch":
-                # Split run_cases into chunks of batch_size
-                for b_start in range(0, len(run_cases), batch_size):
-                    chunk = run_cases[b_start : b_start + batch_size]
-                    chunk_tids = [c.get("transaction_id") for c in chunk]
-                    total_batches_processed += 1
-                    print(f"  [Batch {total_batches_processed}] Investigating {len(chunk)} cases ({', '.join(chunk_tids)})...")
+                from src.agent.batch_partitioner import partition_exceptions_balanced
+                chunks = partition_exceptions_balanced(run_cases, batch_size=batch_size)
+                total_batches_in_run = len(chunks)
+                concurrency_limit = src.config.get_max_parallel_batches()
+                if parallel_batches is not None:
+                    actual_parallel_batches = parallel_batches
+                else:
+                    actual_parallel_batches = min(total_batches_in_run, concurrency_limit)
 
-                    chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
-                    total_batch_llm_interactions += batch_log.llm_interactions
-                    total_individual_fallbacks += batch_log.fallback_count
+                # Determine completed batches from resume partial results
+                completed_batch_numbers = set()
+                resumed_decisions = partial_decisions_map.get(run_num, [])
+                resumed_decisions_by_tid = {d.transaction_id: d for d in resumed_decisions}
+                for b_idx, chunk in enumerate(chunks, 1):
+                    chunk_tids = [c.get("transaction_id", "UNKNOWN") for c in chunk]
+                    if all(tid in resumed_decisions_by_tid for tid in chunk_tids):
+                        completed_batch_numbers.add(b_idx)
+                        # Add those decisions to agent_decisions & investigation_logs only for sequential mode
+                        if actual_parallel_batches == 1:
+                            for tid in chunk_tids:
+                                d = resumed_decisions_by_tid[tid]
+                                agent_decisions.append(d)
+                                exc_obj = next((c for c in chunk if c.get("transaction_id") == tid), {})
+                                t_log = {
+                                    "transaction_id": d.transaction_id,
+                                    "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
+                                    "tools_used": ["batch_prefetch"],
+                                    "evidence": d.evidence or [],
+                                    "decision": d.decision,
+                                    "resolution_type": d.resolution_type or "NONE",
+                                    "resolved_difference": d.resolved_difference,
+                                    "reason": d.reason,
+                                    "confidence": d.confidence,
+                                    "recommended_action": d.recommended_action,
+                                    "tool_call_count": 0,
+                                    "tool_traces": [],
+                                }
+                                investigation_logs.append(t_log)
+                                if d.decision == "NOT_EVALUATED":
+                                    cases_not_evaluated += 1
+                                else:
+                                    cases_completed += 1
 
-                    for d in chunk_decisions:
-                        agent_decisions.append(d)
-                        exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
-                        t_log = {
-                            "transaction_id": d.transaction_id,
-                            "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
-                            "tools_used": ["batch_prefetch"],
-                            "evidence": d.evidence or [],
-                            "decision": d.decision,
-                            "resolution_type": d.resolution_type or "NONE",
-                            "resolved_difference": d.resolved_difference,
-                            "reason": d.reason,
-                            "confidence": d.confidence,
-                            "recommended_action": d.recommended_action,
-                            "tool_call_count": 0,
-                            "tool_traces": [],
+                if actual_parallel_batches == 1:
+                    # Sequential mode!
+                    for b_idx, chunk in enumerate(chunks, 1):
+                        if b_idx in completed_batch_numbers:
+                            print(f"  [Batch {b_idx}] Skipping (Already completed in resume)")
+                            total_batches_processed += 1
+                            continue
+                        
+                        chunk_tids = [c.get("transaction_id") for c in chunk]
+                        total_batches_processed += 1
+                        t_batch_start = time.time()
+
+                        print(f"  [Batch {b_idx}] Investigating {len(chunk)} cases ({', '.join(chunk_tids)})...")
+
+                        if event_callback:
+                            event_callback({
+                                "event": "batch_started",
+                                "evaluation_group_id": evaluation_group_id,
+                                "run_id": run_id,
+                                "run_number": run_num,
+                                "total_runs": runs,
+                                "batch_number": b_idx,
+                                "total_batches": total_batches_in_run,
+                                "cases_in_batch": len(chunk),
+                                "transaction_ids": chunk_tids,
+                                "timestamp": time.time(),
+                            })
+
+                        chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
+                        b_duration = max(time.time() - t_batch_start, 0.001)
+                        all_batch_latencies.append(b_duration)
+
+                        if time_to_first_batch_sec is None:
+                            time_to_first_batch_sec = round(time.time() - t_eval_start, 4)
+
+                        total_batch_llm_interactions += batch_log.llm_interactions
+                        total_individual_fallbacks += batch_log.fallback_count
+
+                        for d in chunk_decisions:
+                            agent_decisions.append(d)
+                            exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
+                            t_log = {
+                                "transaction_id": d.transaction_id,
+                                "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
+                                "tools_used": ["batch_prefetch"],
+                                "evidence": d.evidence or [],
+                                "decision": d.decision,
+                                "resolution_type": d.resolution_type or "NONE",
+                                "resolved_difference": d.resolved_difference,
+                                "reason": d.reason,
+                                "confidence": d.confidence,
+                                "recommended_action": d.recommended_action,
+                                "tool_call_count": 0,
+                                "tool_traces": [],
+                            }
+                            investigation_logs.append(t_log)
+
+                            if d.decision == "NOT_EVALUATED":
+                                cases_not_evaluated += 1
+                                print(f"    -> {d.transaction_id}: NOT_EVALUATED | Reason: {d.reason}")
+                            else:
+                                cases_completed += 1
+                                print(f"    -> {d.transaction_id}: {d.decision} ({d.resolution_type})")
+
+                            if event_callback:
+                                event_callback({
+                                    "event": "case_completed",
+                                    "evaluation_group_id": evaluation_group_id,
+                                    "run_id": run_id,
+                                    "transaction_id": d.transaction_id,
+                                    "decision": d.decision,
+                                    "resolution_type": d.resolution_type or "NONE",
+                                    "confidence": d.confidence,
+                                    "reason": d.reason,
+                                    "timestamp": time.time(),
+                                })
+
+                        # Intermediate batch metrics
+                        batch_eval_res = evaluate_agent_decisions(
+                            agent_decisions=agent_decisions,
+                            ground_truth=ground_truth,
+                            is_subset=True,
+                            total_selected=len(agent_decisions),
+                        )
+
+                        if event_callback:
+                            event_callback({
+                                "event": "batch_completed",
+                                "evaluation_group_id": evaluation_group_id,
+                                "run_id": run_id,
+                                "run_number": run_num,
+                                "total_runs": runs,
+                                "batch_number": b_idx,
+                                "total_batches": total_batches_in_run,
+                                "cases_completed": len(agent_decisions),
+                                "total_cases": cases_selected,
+                                "batch_time_sec": round(b_duration, 4),
+                                "results": [d.model_dump(mode="json") for d in chunk_decisions],
+                                "timestamp": time.time(),
+                            })
+                            event_callback({
+                                "event": "metrics_updated",
+                                "evaluation_group_id": evaluation_group_id,
+                                "run_id": run_id,
+                                "cases_completed": len(agent_decisions),
+                                "total_cases": cases_selected,
+                                "auto_resolved": batch_eval_res.auto_resolved_total,
+                                "human_review": batch_eval_res.human_review_total,
+                                "accuracy": batch_eval_res.phase2_decision_accuracy,
+                                "precision": batch_eval_res.auto_resolution_precision,
+                                "recall": batch_eval_res.auto_resolution_recall,
+                                "timestamp": time.time(),
+                            })
+
+                        # Immediate partial persistence to disk
+                        partial_report = {
+                            "evaluation_group_id": evaluation_group_id,
+                            "status": "RUNNING",
+                            "mode": eval_mode,
+                            "provider": selected_provider,
+                            "model": getattr(llm_client, "model", client_model),
+                            "dataset_size": len(phase1_results),
+                            "phase1_exception_count": exception_count,
+                            "runs": runs,
+                            "cases_per_run": cases,
+                            "batch_size": batch_size,
+                            "current_run_number": run_num,
+                            "current_batch_number": b_idx,
+                            "cases_completed_so_far": len(agent_decisions),
+                            "partial_results": [d.model_dump(mode="json") for d in agent_decisions],
                         }
-                        investigation_logs.append(t_log)
+                        try:
+                            with open(resume_file, "w", encoding="utf-8") as f:
+                                json.dump(partial_report, f, indent=2)
+                        except Exception:
+                            pass
+                else:
+                    # Parallel batches mode!
+                    import asyncio
+                    from src.agent.parallel_batch_engine import run_parallel_batches
 
+                    # Print Plan
+                    print("\n========================================")
+                    print("BALANCED PARALLEL BATCH PLAN")
+                    print("========================================\n")
+                    print(f"Cases selected:          {len(run_cases)}")
+                    print(f"Batch size:               {batch_size}")
+                    print(f"Total batches:            {total_batches_in_run}")
+                    print(f"Concurrency limit:        {concurrency_limit}")
+                    print(f"Actual concurrent batches: {actual_parallel_batches}\n")
+                    for b_idx, chunk in enumerate(chunks, 1):
+                        type_counts: Dict[str, int] = {}
+                        for c in chunk:
+                            etype = c.get("reason") or c.get("exception_type") or c.get("initial_exception") or "UNKNOWN"
+                            type_counts[etype] = type_counts.get(etype, 0) + 1
+
+                        print(f"Batch {b_idx}: {len(chunk)} cases")
+                        for etype, count in sorted(type_counts.items(), key=lambda x: (-x[1], x[0])):
+                            print(f"  {etype:<25} {count}")
+                        print()
+                    print("========================================\n")
+
+                    # We run it
+                    parallel_res = asyncio.run(
+                        run_parallel_batches(
+                            batches=chunks,
+                            batch_agent=batch_agent,
+                            max_parallel_batches=actual_parallel_batches,
+                            ground_truth=ground_truth,
+                            evaluation_group_id=evaluation_group_id,
+                            run_id=run_id,
+                            run_num=run_num,
+                            total_runs=runs,
+                            cases_per_run=cases_selected,
+                            batch_size=batch_size,
+                            selected_provider=selected_provider,
+                            client_model=client_model,
+                            phase1_results=phase1_results,
+                            exception_count=exception_count,
+                            resume_file=resume_file,
+                            event_callback=event_callback,
+                            tracer=tracer,
+                            completed_batch_numbers=completed_batch_numbers,
+                            existing_decisions=agent_decisions,
+                        )
+                    )
+
+                    # Accumulate latencies
+                    all_batch_latencies.extend(parallel_res.batch_latencies)
+
+                    # Merge results
+                    agent_decisions.extend(parallel_res.decisions)
+                    investigation_logs.extend(parallel_res.investigation_logs)
+
+                    total_batches_processed += len(chunks) - len(completed_batch_numbers)
+                    total_batch_llm_interactions += parallel_res.total_batch_llm_interactions
+                    total_individual_fallbacks += parallel_res.total_individual_fallbacks
+
+                    if time_to_first_batch_sec is None:
+                        time_to_first_batch_sec = parallel_res.time_to_first_batch_sec
+
+                    # Update case statuses/metrics
+                    for d in parallel_res.decisions:
                         if d.decision == "NOT_EVALUATED":
                             cases_not_evaluated += 1
-                            print(f"    -> {d.transaction_id}: NOT_EVALUATED | Reason: {d.reason}")
                         else:
                             cases_completed += 1
-                            print(f"    -> {d.transaction_id}: {d.decision} ({d.resolution_type})")
-            else:
 
-                # Individual mode
+            else:
+                # Individual or Multi-Agent mode
                 for idx, exc in enumerate(run_cases, 1):
                     txn_id = exc.get("transaction_id", "UNKNOWN")
                     reason = exc.get("reason", "UNKNOWN")
-                    print(f"  [{idx}/{cases_selected}] Investigating {txn_id} ({reason})...")
+                    t_case_start = time.time()
+                    mode_label = "Multi-Agent" if eval_mode == "multi-agent" else "Individual"
+                    print(f"  [{idx}/{cases_selected}] Investigating {txn_id} ({reason}) [{mode_label}]...")
 
-                    decision, log = agent.investigate_exception(exc)
+                    if eval_mode == "multi-agent":
+                        decision, log = multi_agent.investigate_exception(exc)
+                    else:
+                        decision, log = agent.investigate_exception(exc)
+
+                    c_duration = max(time.time() - t_case_start, 0.001)
+
+                    if time_to_first_batch_sec is None:
+                        time_to_first_batch_sec = round(time.time() - t_eval_start, 4)
+
                     agent_decisions.append(decision)
                     investigation_logs.append(log.model_dump())
 
@@ -303,7 +584,44 @@ def run_evaluation(
                         print(f"    -> Decision: NOT_EVALUATED | Reason: {decision.reason}")
                     else:
                         cases_completed += 1
-                        print(f"    -> Decision: {decision.decision} ({decision.resolution_type}) | Tools used: {log.tool_call_count}")
+                        if eval_mode == "multi-agent":
+                            print(f"    -> Decision: {decision.decision} ({decision.resolution_type}) | Inv calls: {log.investigator_calls}, Ver calls: {log.verifier_calls}")
+                        else:
+                            print(f"    -> Decision: {decision.decision} ({decision.resolution_type}) | Tools used: {log.tool_call_count}")
+
+                    if event_callback:
+                        event_callback({
+                            "event": "case_completed",
+                            "evaluation_group_id": evaluation_group_id,
+                            "run_id": run_id,
+                            "transaction_id": decision.transaction_id,
+                            "decision": decision.decision,
+                            "resolution_type": decision.resolution_type or "NONE",
+                            "confidence": decision.confidence,
+                            "reason": decision.reason,
+                            "case_time_sec": round(c_duration, 4),
+                            "timestamp": time.time(),
+                        })
+
+                        ind_eval_res = evaluate_agent_decisions(
+                            agent_decisions=agent_decisions,
+                            ground_truth=ground_truth,
+                            is_subset=True,
+                            total_selected=len(agent_decisions),
+                        )
+                        event_callback({
+                            "event": "metrics_updated",
+                            "evaluation_group_id": evaluation_group_id,
+                            "run_id": run_id,
+                            "cases_completed": len(agent_decisions),
+                            "total_cases": cases_selected,
+                            "auto_resolved": ind_eval_res.auto_resolved_total,
+                            "human_review": ind_eval_res.human_review_total,
+                            "accuracy": ind_eval_res.phase2_decision_accuracy,
+                            "precision": ind_eval_res.auto_resolution_precision,
+                            "recall": ind_eval_res.auto_resolution_recall,
+                            "timestamp": time.time(),
+                        })
 
             t_run_end = time.time()
             phase2_time_sec = max(t_run_end - t_run_start, 0.001)
@@ -325,12 +643,26 @@ def run_evaluation(
                         "recommended_action": "Refer to target evaluation run.",
                         "tool_call_count": 0,
                         "tool_traces": [],
+                        "investigator_calls": 0,
+                        "verifier_calls": 0,
+                        "model_interactions": 0,
                     }
                     investigation_logs.append(unselected_log)
 
-            run_prompt_tokens = getattr(llm_client, "cumulative_prompt_tokens", 0)
-            run_completion_tokens = getattr(llm_client, "cumulative_completion_tokens", 0)
-            run_total_tokens = getattr(llm_client, "cumulative_total_tokens", 0)
+            if eval_mode == "multi-agent":
+                run_prompt_tokens = (getattr(multi_agent.investigator_llm, "cumulative_prompt_tokens", 0) or 0) + (getattr(multi_agent.verifier_llm, "cumulative_prompt_tokens", 0) or 0)
+                run_completion_tokens = (getattr(multi_agent.investigator_llm, "cumulative_completion_tokens", 0) or 0) + (getattr(multi_agent.verifier_llm, "cumulative_completion_tokens", 0) or 0)
+                run_total_tokens = (getattr(multi_agent.investigator_llm, "cumulative_total_tokens", 0) or 0) + (getattr(multi_agent.verifier_llm, "cumulative_total_tokens", 0) or 0)
+                total_inv_calls = sum(log.get("investigator_calls", 0) for log in investigation_logs)
+                total_ver_calls = sum(log.get("verifier_calls", 0) for log in investigation_logs)
+                total_interactions = sum(log.get("model_interactions", 0) for log in investigation_logs)
+            else:
+                run_prompt_tokens = getattr(llm_client, "cumulative_prompt_tokens", 0)
+                run_completion_tokens = getattr(llm_client, "cumulative_completion_tokens", 0)
+                run_total_tokens = getattr(llm_client, "cumulative_total_tokens", 0)
+                total_inv_calls = 0
+                total_ver_calls = 0
+                total_interactions = cases_completed
 
             # Compute per-run metrics
             eval_results = evaluate_agent_decisions(
@@ -417,6 +749,9 @@ def run_evaluation(
                 "auto_resolution_recall": round(recall, 2),
                 "phase2_time_sec": round(phase2_time_sec, 4),
                 "total_tokens": run_total_tokens if run_total_tokens > 0 else None,
+                "investigator_calls": total_inv_calls,
+                "verifier_calls": total_ver_calls,
+                "total_model_interactions": total_interactions,
                 "investigated_cases": [d.model_dump(mode="json") for d in agent_decisions],
             }
             per_run_sums.append(per_run_summary)
@@ -491,28 +826,94 @@ def run_evaluation(
         }
 
     else:
-        # Run single mode (batch or individual)
         eval_sums, agg, batches_done, batch_interactions, batch_fallbacks = execute_eval_mode(mode)
+        total_eval_duration = max(time.time() - t_eval_start, 0.001)
+        performance_metrics = {
+            "time_to_first_batch_sec": time_to_first_batch_sec or total_eval_duration,
+            "total_processing_time_sec": round(total_eval_duration, 4),
+            "average_batch_latency_sec": round(sum(all_batch_latencies) / len(all_batch_latencies), 4) if all_batch_latencies else 0.0,
+            "min_batch_latency_sec": round(min(all_batch_latencies), 4) if all_batch_latencies else 0.0,
+            "max_batch_latency_sec": round(max(all_batch_latencies), 4) if all_batch_latencies else 0.0,
+            "batches_processed": batches_done,
+        }
+        effective_parallel_batches = parallel_batches if parallel_batches is not None else min((agg['total_selected'] + batch_size - 1) // batch_size, src.config.get_max_parallel_batches())
+        concurrency_limit = src.config.get_max_parallel_batches()
+
+        if effective_parallel_batches > 1 and all_batch_latencies:
+            performance_metrics["sequential_estimated_time_sec"] = round(sum(all_batch_latencies), 4)
 
         total_tokens_val = agg["total_tokens"]
         tok_str = f"{total_tokens_val:,}" if total_tokens_val > 0 else "unknown"
 
         if mode == "batch":
+            if effective_parallel_batches > 1:
+                print("\n========================================")
+                print("PARALLEL LLM EVALUATION")
+                print("========================================\n")
+                print(f"Cases selected:           {agg['total_selected']}")
+                print(f"Batch size:               {batch_size}")
+                print(f"Total batches:            {batches_done}")
+                print(f"Concurrency limit:        {concurrency_limit}")
+                print(f"Actual concurrent batches: {effective_parallel_batches}\n")
+                print(f"Batches completed:         {batches_done}")
+                print(f"Cases completed:           {agg['total_completed']}")
+                print(f"Not evaluated:             {agg['total_not_evaluated']}\n")
+                print(f"Time to first batch:       {performance_metrics['time_to_first_batch_sec']:.4f} sec")
+                print(f"Total processing time:     {performance_metrics['total_processing_time_sec']:.4f} sec")
+                print(f"Average batch latency:     {performance_metrics['average_batch_latency_sec']:.4f} sec")
+                print(f"Min batch latency:         {performance_metrics['min_batch_latency_sec']:.4f} sec")
+                print(f"Max batch latency:         {performance_metrics['max_batch_latency_sec']:.4f} sec\n")
+                print(f"Total tokens:              {tok_str}")
+                print(f"Average tokens/case:       {agg['average_tokens_per_case']:,}\n")
+                print(f"Decision accuracy:         {agg['decision_accuracy']:.2f}%")
+                print(f"Auto-resolution precision: {agg['auto_resolution_precision']:.2f}%")
+                print(f"Auto-resolution recall:    {agg['auto_resolution_recall']:.2f}%")
+                print("========================================\n")
+            else:
+                print("\n========================================")
+                print("LLM INVESTIGATION PERFORMANCE")
+                print("========================================\n")
+                print("Mode: BATCH\n")
+                print(f"Provider: {provider_display_name}")
+                print(f"Model: {client_model}\n")
+                print(f"Cases evaluated:            {agg['total_completed']}")
+                print(f"Batch size:                  {batch_size}")
+                print(f"Batches processed:           {batches_done}\n")
+                print(f"Batch LLM interactions:      {batch_interactions}")
+                print(f"Individual fallbacks:        {batch_fallbacks}\n")
+                print(f"Decision accuracy:           {agg['decision_accuracy']:.2f}%")
+                print(f"Auto-resolution precision:   {agg['auto_resolution_precision']:.2f}%")
+                print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%\n")
+                print(f"Processing time:             {agg['total_processing_time_sec']:.4f} sec")
+                print(f"Average case latency:        {agg['average_case_latency_sec']:.4f} sec\n")
+                print(f"Total tokens:                {tok_str}")
+                print(f"Average tokens/case:         {agg['average_tokens_per_case']:,}")
+                print("========================================\n")
+        elif mode == "multi-agent":
+            total_inv_all = sum(r.get("investigator_calls", 0) for r in eval_sums)
+            total_ver_all = sum(r.get("verifier_calls", 0) for r in eval_sums)
+            total_ints_all = sum(r.get("total_model_interactions", 0) for r in eval_sums)
+            avg_ints_case = (total_ints_all / agg['total_completed']) if agg['total_completed'] > 0 else 0.0
+
             print("\n========================================")
-            print("LLM INVESTIGATION PERFORMANCE")
+            print("CONTROLLED MULTI-AGENT EVALUATION")
             print("========================================\n")
-            print("Mode: BATCH\n")
+            print("Mode: MULTI-AGENT\n")
             print(f"Provider: {provider_display_name}")
             print(f"Model: {client_model}\n")
             print(f"Cases evaluated:            {agg['total_completed']}")
-            print(f"Batch size:                  {batch_size}")
-            print(f"Batches processed:           {batches_done}\n")
-            print(f"Batch LLM interactions:      {batch_interactions}")
-            print(f"Individual fallbacks:        {batch_fallbacks}\n")
             print(f"Decision accuracy:           {agg['decision_accuracy']:.2f}%")
             print(f"Auto-resolution precision:   {agg['auto_resolution_precision']:.2f}%")
-            print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%\n")
-            print(f"Processing time:             {agg['total_processing_time_sec']:.4f} sec")
+            print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%")
+            print(f"Human-review rate:           {agg['human_review_rate']:.2f}%\n")
+            print("----------------------------------------")
+            print("MULTI-AGENT COORDINATION & COST METRICS")
+            print("----------------------------------------\n")
+            print(f"Investigator calls:          {total_inv_all}")
+            print(f"Verifier calls:              {total_ver_all}")
+            print(f"Total model interactions:    {total_ints_all}")
+            print(f"Average interactions/case:   {avg_ints_case:.2f}\n")
+            print(f"Total processing time:       {agg['total_processing_time_sec']:.4f} sec")
             print(f"Average case latency:        {agg['average_case_latency_sec']:.4f} sec\n")
             print(f"Total tokens:                {tok_str}")
             print(f"Average tokens/case:         {agg['average_tokens_per_case']:,}")
@@ -547,11 +948,42 @@ def run_evaluation(
             print(f"Average tokens/case:         {agg['average_tokens_per_case']:,}")
             print("========================================\n")
 
+        # Save final completed report
+        final_report_data = {
+            "evaluation_group_id": evaluation_group_id,
+            "status": "COMPLETED",
+            "mode": mode,
+            "provider": selected_provider,
+            "model": client_model,
+            "dataset_size": len(phase1_results),
+            "phase1_exception_count": exception_count,
+            "runs": runs,
+            "cases_per_run": cases,
+            "batch_size": batch_size if mode == "batch" else 1,
+            "results": eval_sums,
+            "aggregate_metrics": agg,
+            "performance": performance_metrics,
+        }
+        final_report_file = os.path.join(eval_dir, f"{evaluation_group_id}.json")
+        with open(final_report_file, "w", encoding="utf-8") as f:
+            json.dump(final_report_data, f, indent=2)
+
+        if event_callback:
+            event_callback({
+                "event": "run_completed",
+                "evaluation_group_id": evaluation_group_id,
+                "status": "COMPLETED",
+                "aggregate_metrics": agg,
+                "performance": performance_metrics,
+                "timestamp": time.time(),
+            })
+
         return {
             "evaluation_group_id": evaluation_group_id,
             "provider": selected_provider,
             "model": client_model,
             "mode": mode,
+            "status": "COMPLETED",
             "runs": runs,
             "cases_per_run": cases,
             "batch_size": batch_size if mode == "batch" else 1,
@@ -570,6 +1002,7 @@ def run_evaluation(
             "total_tokens": agg["total_tokens"],
             "average_tokens_per_case": agg["average_tokens_per_case"],
             "aggregate_metrics": agg,
+            "performance": performance_metrics,
             "per_run_summaries": eval_sums,
         }
 
@@ -604,11 +1037,22 @@ def main():
         help="Batch size in batch mode (default: 5, range: 1-10)",
     )
     parser.add_argument(
+        "--parallel-batches",
+        type=int,
+        default=None,
+        help="Optional max parallel batches override (1-5, default: auto = min(total_batches, 5))",
+    )
+    parser.add_argument(
+        "--parallel-benchmark",
+        action="store_true",
+        help="Run benchmark comparing sequential (1) and parallel (5) batch runs",
+    )
+    parser.add_argument(
         "--mode",
         type=str,
         default="batch",
-        choices=["batch", "individual", "compare"],
-        help="Investigation mode: batch, individual, or compare (default: batch)",
+        choices=["batch", "individual", "compare", "multi-agent"],
+        help="Investigation mode: batch, individual, compare, or multi-agent (default: batch)",
     )
     parser.add_argument(
         "--model",
@@ -622,17 +1066,81 @@ def main():
         default=None,
         help="Evaluation group ID to resume unfinished runs",
     )
+    parser.add_argument(
+        "--trace",
+        dest="trace",
+        action="store_true",
+        default=None,
+        help="Enable live real-time agent trace in terminal (overrides SHOW_AGENT_TRACE)",
+    )
+    parser.add_argument(
+        "--no-trace",
+        dest="trace",
+        action="store_false",
+        help="Disable live agent trace in terminal",
+    )
     args = parser.parse_args()
 
-    run_evaluation(
-        provider=args.provider,
-        cases=args.cases,
-        runs=args.runs,
-        batch_size=args.batch_size,
-        mode=args.mode,
-        model=args.model,
-        resume_group_id=args.resume,
-    )
+    if args.parallel_benchmark:
+        print("\n==================================================")
+        print("RUNNING BENCHMARK: SEQUENTIAL VS PARALLEL BATCHES")
+        print("==================================================\n")
+        print("-> Running Sequential Evaluation (parallel_batches=1)...")
+        seq_res = run_evaluation(
+            provider=args.provider,
+            cases=args.cases,
+            runs=args.runs,
+            batch_size=args.batch_size,
+            parallel_batches=1,
+            mode=args.mode,
+            model=args.model,
+            resume_group_id=args.resume,
+            trace=False,
+        )
+        print("-> Running Parallel Evaluation (parallel_batches=5)...")
+        p_res = run_evaluation(
+            provider=args.provider,
+            cases=args.cases,
+            runs=args.runs,
+            batch_size=args.batch_size,
+            parallel_batches=5,
+            mode=args.mode,
+            model=args.model,
+            resume_group_id=args.resume,
+            trace=False,
+        )
+        
+        # Compare!
+        print("\n========================================")
+        print("PARALLEL BENCHMARK COMPARISON")
+        print("========================================")
+        print(f"Cases: {args.cases}\n")
+        print(f"{'Metric':<25} {'Sequential':<16} {'Parallel':<16} {'Reduction'}")
+        print("-" * 72)
+        seq_time = seq_res["performance"]["total_processing_time_sec"]
+        p_time = p_res["performance"]["total_processing_time_sec"]
+        time_red = ((seq_time - p_time) / seq_time * 100) if seq_time > 0 else 0.0
+        
+        seq_toks = seq_res["total_tokens"]
+        p_toks = p_res["total_tokens"]
+        tok_red = ((seq_toks - p_toks) / seq_toks * 100) if seq_toks > 0 else 0.0
+        
+        print(f"{'Total Latency':<25} {seq_time:>10.4f}s      {p_time:>10.4f}s       {time_red:>7.1f}%")
+        print(f"{'Total Tokens':<25} {seq_toks:>10,d}        {p_toks:>10,d}         {tok_red:>7.1f}%")
+        print(f"{'Decision Accuracy':<25} {seq_res['aggregate_metrics']['decision_accuracy']:>9.2f}%      {p_res['aggregate_metrics']['decision_accuracy']:>9.2f}%")
+        print("========================================\n")
+    else:
+        run_evaluation(
+            provider=args.provider,
+            cases=args.cases,
+            runs=args.runs,
+            batch_size=args.batch_size,
+            parallel_batches=args.parallel_batches,
+            mode=args.mode,
+            model=args.model,
+            resume_group_id=args.resume,
+            trace=args.trace,
+        )
 
 
 if __name__ == "__main__":

@@ -45,5 +45,15 @@ def get_db():
 
 
 def init_db():
-    """Initialises database tables."""
+    """Initialises database tables and applies lightweight schema updates."""
     Base.metadata.create_all(bind=engine)
+    try:
+        with engine.begin() as conn:
+            if engine.dialect.name == "sqlite":
+                res = conn.exec_driver_sql("PRAGMA table_info(transaction_results)").fetchall()
+                col_names = [r[1] for r in res]
+                if col_names and "source_provenance_json" not in col_names:
+                    conn.exec_driver_sql("ALTER TABLE transaction_results ADD COLUMN source_provenance_json TEXT")
+    except Exception:
+        pass
+

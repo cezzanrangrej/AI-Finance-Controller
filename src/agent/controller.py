@@ -20,9 +20,11 @@ _project_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+from decimal import Decimal
 from src.agent.prompts import SYSTEM_PROMPT, build_investigation_prompt
 from src.agent.schemas import AgentDecision, InvestigationLog, ToolCallTrace
 from src.agent.tools import FinancialToolkit
+from src.utils.formatters import format_amount, format_currency, safe_decimal, safe_float, safe_int, safe_numeric
 
 # Maximum number of tool calls per investigation before auto-escalation
 MAX_TOOL_CALLS = 5
@@ -87,20 +89,20 @@ class DemoLLMClient:
                 has_adj = adj_text != "None" and "₹" in adj_text
 
                 # Extract calculated amounts
-                exp_match = re.search(r"Expected net = ₹([\d,]+)", block)
-                adj_exp_match = re.search(r"Adjusted net = ₹([\d,]+)", block)
-                bank_match = re.search(r"credited ₹([\d,]+)", block)
+                exp_match = re.search(r"Expected net = ₹([\d,]+(?:\.\d+)?)", block)
+                adj_exp_match = re.search(r"Adjusted net = ₹([\d,]+(?:\.\d+)?)", block)
+                bank_match = re.search(r"credited ₹([\d,]+(?:\.\d+)?)", block)
 
-                exp_net = int(exp_match.group(1).replace(",", "")) if exp_match else None
-                adj_exp_net = int(adj_exp_match.group(1).replace(",", "")) if adj_exp_match else None
-                bank_amt = int(bank_match.group(1).replace(",", "")) if bank_match else None
+                exp_net = safe_numeric(exp_match.group(1)) if exp_match else None
+                adj_exp_net = safe_numeric(adj_exp_match.group(1)) if adj_exp_match else None
+                bank_amt = safe_numeric(bank_match.group(1)) if bank_match else None
 
                 # Extract adjustment amount
                 adj_amt = None
                 if has_adj:
-                    adj_amt_match = re.search(r"₹([\d,]+)", adj_text)
+                    adj_amt_match = re.search(r"₹([\d,]+(?:\.\d+)?)", adj_text)
                     if adj_amt_match:
-                        adj_amt = int(adj_amt_match.group(1).replace(",", ""))
+                        adj_amt = safe_numeric(adj_amt_match.group(1))
 
                 if is_missing_ledger:
                     dec = "HUMAN_REVIEW"
@@ -112,7 +114,7 @@ class DemoLLMClient:
                 elif is_missing_bank:
                     dec = "HUMAN_REVIEW"
                     res_type = "NONE"
-                    reason = f"Expected settlement ₹{exp_net:,} missing from bank statements." if exp_net else "Settlement missing from bank statement."
+                    reason = f"Expected settlement {format_currency(exp_net)} missing from bank statements." if exp_net else "Settlement missing from bank statement."
                     action = "Contact acquiring bank."
                     diff = None
                     conf = 0.95
@@ -126,14 +128,14 @@ class DemoLLMClient:
                 elif has_adj and adj_exp_net is not None and bank_amt is not None and adj_exp_net == bank_amt and adj_amt:
                     dec = "AUTO_RESOLVED"
                     res_type = "ADJUSTMENT_EXPLAINED"
-                    reason = f"Bank credit (₹{bank_amt:,}) equals expected settlement minus documented adjustment of ₹{adj_amt:,}."
+                    reason = f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(adj_amt)}."
                     action = "No action needed; discrepancy fully accounted for by adjustment record."
                     diff = float(adj_amt)
                     conf = 1.0
                 elif has_adj and "GROSS_AMOUNT_MISMATCH" in exc_type and adj_amt:
                     dec = "AUTO_RESOLVED"
                     res_type = "ADJUSTMENT_EXPLAINED"
-                    reason = f"Gross amount discrepancy of ₹{adj_amt:,} is explicitly accounted for by adjustment reference."
+                    reason = f"Gross amount discrepancy of {format_currency(adj_amt)} is explicitly accounted for by adjustment reference."
                     action = "No action needed; gross amount adjustment verified."
                     diff = float(adj_amt)
                     conf = 1.0
@@ -173,13 +175,61 @@ class DemoLLMClient:
 
         txn_id = "UNKNOWN"
         user_content = ""
+        is_verifier = False
+        is_investigator = False
+
         for m in messages:
+            content = m.get("content") or ""
+            if "VERIFIER AGENT" in content or "Verification Instructions" in content:
+                is_verifier = True
+            if "INVESTIGATOR AGENT" in content:
+                is_investigator = True
             if m.get("role") == "user":
-                user_content = m.get("content", "")
+                user_content = content
                 for line in user_content.splitlines():
                     if "Transaction ID:" in line:
                         txn_id = line.split(":")[-1].strip()
                         break
+
+        # Check if this is a Verifier Agent verification request
+        if is_verifier:
+            is_auto = "AUTO_RESOLVED" in user_content
+            has_valid_proof = "ADJUSTMENT_EXPLAINED" in user_content or (is_auto and "adjusted_expected_net" in user_content)
+            
+            if has_valid_proof:
+                v_decision = "AUTO_RESOLVED"
+                v_reason = "Independent verification confirmed that documented adjustments mathematically explain the discrepancy."
+                v_refs = ["Adjusted settlement matches bank credit exactly."]
+                v_contra = []
+                v_conf = 1.0
+            else:
+                v_decision = "HUMAN_REVIEW"
+                v_reason = "Independent verification confirmed discrepancy is unexplained with no valid adjustment record."
+                v_refs = ["No valid adjustment record found."]
+                v_contra = []
+                v_conf = 0.95
+
+            v_payload = {
+                "transaction_id": txn_id,
+                "verified": True,
+                "decision": v_decision,
+                "reason": v_reason,
+                "evidence_references": v_refs,
+                "contradictions": v_contra,
+                "confidence": v_conf,
+            }
+
+            class VerifierDemoMessage:
+                content = json.dumps(v_payload)
+                tool_calls = None
+
+            class VerifierDemoChoice:
+                message = VerifierDemoMessage()
+
+            class VerifierDemoResponse:
+                choices = [VerifierDemoChoice()]
+
+            return VerifierDemoResponse()
 
         tool_responses = [m for m in messages if m.get("role") == "tool"]
 
@@ -247,14 +297,21 @@ class DemoLLMClient:
         banks = txn_data.get("bank_records", [])
         adjustments = adj_data.get("adjustments", [])
 
-        # Calculate numbers
-        payment_amt = payment.get("amount") if payment else None
-        gross_amt = ledger.get("gross_amount") if ledger else None
-        fee_amt = ledger.get("fee") if ledger else None
-        expected_net = (gross_amt - fee_amt) if (gross_amt is not None and fee_amt is not None) else None
-        bank_amt = banks[0].get("credited_amount") if len(banks) == 1 else None
+        # Calculate numbers safely with Decimal precision
+        payment_dec = safe_decimal(payment.get("amount")) if payment else None
+        gross_dec = safe_decimal(ledger.get("gross_amount")) if ledger else None
+        fee_dec = safe_decimal(ledger.get("fee")) if ledger else None
+        expected_net_dec = (gross_dec - fee_dec) if (gross_dec is not None and fee_dec is not None) else None
+        bank_dec = safe_decimal(banks[0].get("credited_amount")) if len(banks) == 1 else None
 
-        total_adj_amt = sum(a.get("amount") or 0 for a in adjustments)
+        payment_amt = safe_numeric(payment_dec)
+        gross_amt = safe_numeric(gross_dec)
+        fee_amt = safe_numeric(fee_dec)
+        expected_net = safe_numeric(expected_net_dec)
+        bank_amt = safe_numeric(bank_dec)
+
+        total_adj_dec = sum((safe_decimal(a.get("amount")) or Decimal(0)) for a in adjustments)
+        total_adj_amt = safe_numeric(total_adj_dec) or 0
 
         # Decision Evaluation Policy
         decision = "HUMAN_REVIEW"
@@ -265,55 +322,56 @@ class DemoLLMClient:
         confidence = 0.95
         evidence = []
 
-        if payment_amt:
-            evidence.append(f"Payment amount = ₹{payment_amt:,}")
+        if payment_amt is not None:
+            evidence.append(f"Payment amount = {format_currency(payment_amt)}")
         if ledger:
-            evidence.append(f"Ledger gross = ₹{gross_amt:,}, fee = ₹{fee_amt:,}")
+            evidence.append(f"Ledger gross = {format_currency(gross_amt)}, fee = {format_currency(fee_amt)}")
             if expected_net is not None:
-                evidence.append(f"Expected settlement = ₹{expected_net:,}")
+                evidence.append(f"Expected settlement = {format_currency(expected_net)}")
         if bank_amt is not None:
-            evidence.append(f"Bank credit = ₹{bank_amt:,}")
+            evidence.append(f"Bank credit = {format_currency(bank_amt)}")
 
         # Check if adjustments explain the gap
         if adjustments:
             for adj in adjustments:
-                evidence.append(f"Adjustment ({adj.get('adjustment_type')}): ₹{adj.get('amount'):,} - {adj.get('reason')}")
+                evidence.append(f"Adjustment ({adj.get('adjustment_type')}): {format_currency(adj.get('amount'))} - {adj.get('reason')}")
 
         if not ledger:
             decision = "HUMAN_REVIEW"
-            reason = f"Payment captured (₹{payment_amt:,}) but missing corresponding ledger entry in ERP."
+            reason = f"Payment captured ({format_currency(payment_amt)}) but missing corresponding ledger entry in ERP."
             action = "Post missing ledger entry in ERP."
         elif not banks:
             decision = "HUMAN_REVIEW"
-            reason = f"Expected settlement ₹{expected_net:,} missing from bank statements."
+            reason = f"Expected settlement {format_currency(expected_net)} missing from bank statements."
             action = "Contact acquiring bank to trace settlement batch."
         elif len(banks) > 1:
             decision = "HUMAN_REVIEW"
             reason = f"Multiple ({len(banks)}) bank settlement records found for single transaction."
             action = "Review bank statement for potential duplicate credit."
-        elif expected_net is not None and bank_amt is not None and (expected_net - total_adj_amt) == bank_amt and total_adj_amt > 0:
+        elif expected_net_dec is not None and bank_dec is not None and (expected_net_dec - total_adj_dec) == bank_dec and total_adj_dec > 0:
             # Deterministically explained by adjustments!
             decision = "AUTO_RESOLVED"
             resolution_type = "ADJUSTMENT_EXPLAINED"
-            resolved_diff = float(total_adj_amt)
+            resolved_diff = float(total_adj_dec)
             confidence = 1.0
-            reason = f"Bank credit (₹{bank_amt:,}) equals expected settlement (₹{expected_net:,}) minus documented adjustment of ₹{total_adj_amt:,}."
+            reason = f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)}."
             action = "No action needed; discrepancy fully accounted for by adjustment record."
-            evidence.append(f"Calculation: ₹{expected_net:,} - ₹{total_adj_amt:,} = ₹{bank_amt:,}")
-        elif payment_amt is not None and gross_amt is not None and (payment_amt - total_adj_amt) == gross_amt and total_adj_amt > 0:
+            evidence.append(f"Calculation: {format_currency(expected_net)} - {format_currency(total_adj_amt)} = {format_currency(bank_amt)}")
+        elif payment_dec is not None and gross_dec is not None and (payment_dec - total_adj_dec) == gross_dec and total_adj_dec > 0:
             decision = "AUTO_RESOLVED"
             resolution_type = "ADJUSTMENT_EXPLAINED"
-            resolved_diff = float(total_adj_amt)
+            resolved_diff = float(total_adj_dec)
             confidence = 1.0
-            reason = f"Gross amount discrepancy of ₹{total_adj_amt:,} is explicitly accounted for by adjustment reference."
+            reason = f"Gross amount discrepancy of {format_currency(total_adj_amt)} is explicitly accounted for by adjustment reference."
             action = "No action needed; gross amount adjustment verified."
-        elif expected_net is not None and bank_amt is not None:
-            diff = expected_net - bank_amt
-            if adjustments and total_adj_amt != diff:
-                reason = f"Bank credit is ₹{diff:,} lower than expected, but documented adjustments total ₹{total_adj_amt:,} (mismatch of ₹{diff - total_adj_amt:,})."
+        elif expected_net_dec is not None and bank_dec is not None:
+            diff_dec = expected_net_dec - bank_dec
+            diff = safe_numeric(diff_dec)
+            if adjustments and total_adj_dec != diff_dec:
+                reason = f"Bank credit is {format_currency(diff)} lower than expected, but documented adjustments total {format_currency(total_adj_amt)} (mismatch of {format_currency(safe_numeric(diff_dec - total_adj_dec))})."
                 action = "Review bank fee schedule and settlement file."
             else:
-                reason = f"Bank credit of ₹{bank_amt:,} is ₹{diff:,} lower than expected settlement (₹{expected_net:,}) with no adjustment record."
+                reason = f"Bank credit of {format_currency(bank_amt)} is {format_currency(diff)} lower than expected settlement ({format_currency(expected_net)}) with no adjustment record."
                 action = "Review bank settlement details."
         else:
             reason = "Discrepancy detected requiring manual review."
@@ -344,10 +402,31 @@ class DemoLLMClient:
         return FinalDemoResponse()
 
 
+def validate_model_not_key(provider: str, model_str: str) -> None:
+    """Checks if a model string accidentally contains a secret key pattern."""
+    if not model_str:
+        return
+    import re
+    # Patterns matching secret keys
+    if re.search(r"(sk-or-v1-[a-zA-Z0-9]{10,}|sk-[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{20,}|AQ\.[a-zA-Z0-9_-]{20,}|xai-[a-zA-Z0-9]{20,})", model_str):
+        raise ValueError(
+            f"ConfigurationError: {provider.upper()}_MODEL appears to contain a credential rather than a model ID."
+        )
+
+
+def create_llm_client(
+    provider: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Any:
+    """Standalone provider client factory helper."""
+    return LLMClient(provider=provider, api_key=api_key, model=model)
+
+
 class LLMClient:
     """
     Factory router for creating the appropriate LLM client instance based on
-    LLM_PROVIDER configuration and available API credentials.
+    provider configuration and available API credentials.
     """
 
     def chat(
@@ -368,12 +447,15 @@ class LLMClient:
         selected_provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
         env_or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
         env_gem_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+        env_grok_key = (os.getenv("INVESTIGATOR_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
 
         if not selected_provider:
             if env_or_key:
                 selected_provider = "openrouter"
             elif env_gem_key:
                 selected_provider = "gemini"
+            elif env_grok_key:
+                selected_provider = "grok"
             else:
                 selected_provider = "demo"
 
@@ -381,35 +463,66 @@ class LLMClient:
             or_key = (api_key or env_or_key).strip() if (api_key or env_or_key) else ""
             if not or_key:
                 raise ValueError(
-                    "LLM_PROVIDER is set to 'openrouter', but OPENROUTER_API_KEY is missing. "
-                    "Set OPENROUTER_API_KEY in environment or configure LLM_PROVIDER=demo for Demo Mode."
+                    "OPENROUTER_API_KEY is missing. "
+                    "Set OPENROUTER_API_KEY in environment or configure provider=demo for Demo Mode."
                 )
             or_model = (model or os.getenv("OPENROUTER_MODEL") or "").strip()
             if not or_model:
                 raise ValueError(
-                    "LLM_PROVIDER is set to 'openrouter', but OPENROUTER_MODEL is missing. "
+                    "OPENROUTER_MODEL is missing. "
                     "Set OPENROUTER_MODEL (e.g. OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct) in environment."
                 )
+            validate_model_not_key("openrouter", or_model)
+
             from src.agent.openrouter_client import OpenRouterLLMClient
-            return OpenRouterLLMClient(api_key=or_key, model=or_model)
+            client = OpenRouterLLMClient(api_key=or_key, model=or_model)
+            client.provider_name = "openrouter"
+            return client
 
         elif selected_provider == "gemini":
             gem_key = (api_key or env_gem_key).strip() if (api_key or env_gem_key) else ""
             if not gem_key:
                 raise ValueError(
-                    "LLM_PROVIDER is set to 'gemini', but GEMINI_API_KEY is missing. "
-                    "Set GEMINI_API_KEY in environment or configure LLM_PROVIDER=demo for Demo Mode."
+                    "GEMINI_API_KEY is missing. "
+                    "Set GEMINI_API_KEY in environment or configure provider=demo for Demo Mode."
                 )
+            gem_model = (model or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+            if not gem_model:
+                raise ValueError("GEMINI_MODEL is missing.")
+            validate_model_not_key("gemini", gem_model)
+
             from src.agent.gemini_client import GeminiLLMClient
-            return GeminiLLMClient(api_key=gem_key, model=model)
+            client = GeminiLLMClient(api_key=gem_key, model=gem_model)
+            client.provider_name = "gemini"
+            return client
+
+        elif selected_provider == "grok" or selected_provider == "xai":
+            grok_key = (api_key or env_grok_key).strip() if (api_key or env_grok_key) else ""
+            if not grok_key:
+                raise ValueError(
+                    "INVESTIGATOR_API_KEY / GROK_API_KEY is missing. "
+                    "Set INVESTIGATOR_API_KEY in environment or configure provider=demo for Demo Mode."
+                )
+            grok_model = (model or os.getenv("INVESTIGATOR_MODEL") or os.getenv("GROK_MODEL") or "grok-2-latest").strip()
+            if not grok_model:
+                raise ValueError("INVESTIGATOR_MODEL is missing.")
+            validate_model_not_key("grok", grok_model)
+
+            from src.agent.grok_client import GrokLLMClient
+            client = GrokLLMClient(api_key=grok_key, model=grok_model)
+            client.provider_name = "grok"
+            return client
 
         elif selected_provider == "demo":
-            return DemoLLMClient(model=model or "demo")
+            client = DemoLLMClient(model=model or "demo")
+            client.provider_name = "demo"
+            return client
 
         else:
             raise ValueError(
-                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', or 'openrouter'."
+                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', 'openrouter', or 'grok'."
             )
+
 
 
 
@@ -480,55 +593,60 @@ def has_sufficient_resolution_evidence(
 
     # 2. Adjustments check
     adjustments = state.adjustments
-    total_adj_amt = sum(a.get("amount", 0) for a in adjustments if a.get("amount") is not None)
-    if total_adj_amt <= 0:
+    total_adj_dec = sum((safe_decimal(a.get("amount")) or Decimal(0)) for a in adjustments if a.get("amount") is not None)
+    if total_adj_dec <= 0:
         return False, None
+    total_adj_amt = safe_numeric(total_adj_dec) or 0
 
     # 3. Bank Amount Mismatch / Adjusted Settlement Resolution
-    bank_amt = None
+    bank_dec = None
     if state.bank_records and len(state.bank_records) == 1:
-        bank_amt = state.bank_records[0].get("credited_amount")
+        bank_dec = safe_decimal(state.bank_records[0].get("credited_amount"))
+    bank_amt = safe_numeric(bank_dec)
 
     # If calculate_adjusted_expected_settlement was explicitly called
     if state.adjusted_expected_settlement:
-        adj_net = state.adjusted_expected_settlement.get("adjusted_expected_net")
-        if bank_amt is not None and adj_net is not None and adj_net == bank_amt:
+        adj_net_dec = safe_decimal(state.adjusted_expected_settlement.get("adjusted_expected_net"))
+        if bank_dec is not None and adj_net_dec is not None and adj_net_dec == bank_dec:
             return True, {
                 "resolution_type": "ADJUSTMENT_EXPLAINED",
-                "resolved_difference": float(total_adj_amt),
-                "reason": f"Bank credit (₹{bank_amt:,}) equals expected settlement minus documented adjustment of ₹{total_adj_amt:,}.",
-                "calculation": state.adjusted_expected_settlement.get("calculation", f"Adjusted settlement = ₹{bank_amt:,}"),
+                "resolved_difference": float(total_adj_dec),
+                "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(total_adj_amt)}.",
+                "calculation": state.adjusted_expected_settlement.get("calculation", f"Adjusted settlement = {format_currency(bank_amt)}"),
             }
 
     # If ledger and bank amounts are known
-    expected_net = None
+    expected_net_dec = None
     if state.expected_settlement:
-        expected_net = state.expected_settlement.get("expected_net")
+        expected_net_dec = safe_decimal(state.expected_settlement.get("expected_net"))
     elif state.ledger:
-        gross = state.ledger.get("gross_amount")
-        fee = state.ledger.get("fee", 0)
-        if gross is not None:
-            expected_net = gross - fee
+        gross_dec = safe_decimal(state.ledger.get("gross_amount"))
+        fee_dec = safe_decimal(state.ledger.get("fee")) or Decimal(0)
+        if gross_dec is not None:
+            expected_net_dec = gross_dec - fee_dec
 
-    if expected_net is not None and bank_amt is not None:
-        if (expected_net - total_adj_amt) == bank_amt:
+    expected_net = safe_numeric(expected_net_dec)
+    if expected_net_dec is not None and bank_dec is not None:
+        if (expected_net_dec - total_adj_dec) == bank_dec:
             return True, {
                 "resolution_type": "ADJUSTMENT_EXPLAINED",
-                "resolved_difference": float(total_adj_amt),
-                "reason": f"Bank credit (₹{bank_amt:,}) equals expected settlement (₹{expected_net:,}) minus documented adjustment of ₹{total_adj_amt:,}.",
-                "calculation": f"₹{expected_net:,} - ₹{total_adj_amt:,} = ₹{bank_amt:,}",
+                "resolved_difference": float(total_adj_dec),
+                "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)}.",
+                "calculation": f"{format_currency(expected_net)} - {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
             }
 
     # 4. Gross Amount Mismatch Resolution
-    payment_amt = state.payment.get("amount") if state.payment else None
-    gross_amt = state.ledger.get("gross_amount") if state.ledger else None
-    if payment_amt is not None and gross_amt is not None:
-        if (payment_amt - total_adj_amt) == gross_amt or (gross_amt - total_adj_amt) == payment_amt:
+    payment_dec = safe_decimal(state.payment.get("amount")) if state.payment else None
+    gross_dec = safe_decimal(state.ledger.get("gross_amount")) if state.ledger else None
+    payment_amt = safe_numeric(payment_dec)
+    gross_amt = safe_numeric(gross_dec)
+    if payment_dec is not None and gross_dec is not None:
+        if (payment_dec - total_adj_dec) == gross_dec or (gross_dec - total_adj_dec) == payment_dec:
             return True, {
                 "resolution_type": "ADJUSTMENT_EXPLAINED",
-                "resolved_difference": float(total_adj_amt),
-                "reason": f"Gross amount discrepancy of ₹{total_adj_amt:,} is explicitly accounted for by adjustment reference.",
-                "calculation": f"Payment ₹{payment_amt:,} adjusted by ₹{total_adj_amt:,} equals Ledger Gross ₹{gross_amt:,}",
+                "resolved_difference": float(total_adj_dec),
+                "reason": f"Gross amount discrepancy of {format_currency(total_adj_amt)} is explicitly accounted for by adjustment reference.",
+                "calculation": f"Payment {format_currency(payment_amt)} adjusted by {format_currency(total_adj_amt)} equals Ledger Gross {format_currency(gross_amt)}",
             }
 
     return False, None
@@ -561,9 +679,16 @@ def build_proven_adjustment_resolution(
 class AgentController:
     """Orchestrates exception investigation using the LLM and deterministic tools."""
 
-    def __init__(self, toolkit: FinancialToolkit, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        toolkit: FinancialToolkit,
+        llm_client: LLMClient,
+        tracer: Optional[Any] = None,
+    ) -> None:
         self.toolkit = toolkit
         self.llm = llm_client
+        from src.agent.trace import AgentTracer, default_tracer
+        self.tracer = tracer or default_tracer
 
     def investigate_exception(
         self, exception_record: Dict[str, Any]
@@ -870,18 +995,18 @@ class AgentController:
 
         elif tool_name == "get_payment_record":
             amt = result.get("amount")
-            return f"Payment amount: ₹{amt:,} (status: {result.get('status')})" if amt is not None else "No record"
+            return f"Payment amount: {format_currency(amt)} (status: {result.get('status')})" if amt is not None else "No record"
 
         elif tool_name == "get_ledger_record":
             gross = result.get("gross_amount")
             fee = result.get("fee", 0)
             net = result.get("net_amount", 0)
-            return f"Ledger gross: ₹{gross:,}, fee: ₹{fee:,}, net: ₹{net:,}" if gross is not None else "No record"
+            return f"Ledger gross: {format_currency(gross)}, fee: {format_currency(fee)}, net: {format_currency(net)}" if gross is not None else "No record"
 
         elif tool_name == "get_bank_records":
             count = result.get("count", 0)
             records = result.get("bank_records", [])
-            amounts = [f"₹{r.get('credited_amount', 0):,}" for r in records]
+            amounts = [f"{format_currency(r.get('credited_amount', 0))}" for r in records]
             return f"{count} bank record(s): {', '.join(amounts)}" if count > 0 else "0 bank records"
 
         elif tool_name == "get_adjustments":
@@ -889,14 +1014,14 @@ class AgentController:
             records = result.get("adjustments", [])
             if count == 0:
                 return "0 adjustments found"
-            adjs = [f"{r.get('adjustment_type')}: ₹{r.get('amount', 0):,} ({r.get('reason', '')})" for r in records]
+            adjs = [f"{r.get('adjustment_type')}: {format_currency(r.get('amount', 0))} ({r.get('reason', '')})" for r in records]
             return f"{count} adjustment(s): {'; '.join(adjs)}"
 
         elif tool_name == "calculate_expected_settlement":
-            return f"Expected net: ₹{result.get('expected_net', 0):,} ({result.get('calculation', '')})"
+            return f"Expected net: {format_currency(result.get('expected_net', 0))} ({result.get('calculation', '')})"
 
         elif tool_name == "calculate_adjusted_expected_settlement":
-            return f"Adjusted expected net: ₹{result.get('adjusted_expected_net', 0):,} ({result.get('calculation', '')})"
+            return f"Adjusted expected net: {format_currency(result.get('adjusted_expected_net', 0))} ({result.get('calculation', '')})"
 
         elif tool_name == "check_for_duplicates":
             return f"Duplicate count: {result.get('duplicate_count', 0)}, is_duplicate: {result.get('is_duplicate', False)}"
@@ -912,34 +1037,34 @@ class AgentController:
         if tool_name == "get_transaction":
             p = result.get("payment")
             if p and p.get("amount") is not None:
-                evidence.append(f"Payment captured = ₹{p.get('amount'):,}")
+                evidence.append(f"Payment captured = {format_currency(p.get('amount'))}")
             l = result.get("ledger")
             if l:
                 gross = l.get("gross_amount")
                 fee = l.get("fee")
                 if gross is not None and fee is not None:
-                    evidence.append(f"Ledger gross = ₹{gross:,}, fee = ₹{fee:,}")
+                    evidence.append(f"Ledger gross = {format_currency(gross)}, fee = {format_currency(fee)}")
             for b in result.get("bank_records", []):
                 amt = b.get("credited_amount")
                 if amt is not None:
-                    evidence.append(f"Bank credit ({b.get('bank_reference')}) = ₹{amt:,}")
+                    evidence.append(f"Bank credit ({b.get('bank_reference')}) = {format_currency(amt)}")
             for a in result.get("adjustments", []):
                 amt = a.get("amount")
                 if amt is not None:
-                    evidence.append(f"Adjustment ({a.get('adjustment_type')}): ₹{amt:,} ({a.get('reason', '')})")
+                    evidence.append(f"Adjustment ({a.get('adjustment_type')}): {format_currency(amt)} ({a.get('reason', '')})")
 
         elif tool_name == "get_payment_record":
             amt = result.get("amount")
             if amt is not None:
-                evidence.append(f"Payment amount = ₹{amt:,}")
+                evidence.append(f"Payment amount = {format_currency(amt)}")
 
         elif tool_name == "get_ledger_record":
             gross = result.get("gross_amount")
             fee = result.get("fee")
             if gross is not None:
-                evidence.append(f"Ledger gross = ₹{gross:,}")
+                evidence.append(f"Ledger gross = {format_currency(gross)}")
             if fee is not None:
-                evidence.append(f"Ledger fee = ₹{fee:,}")
+                evidence.append(f"Ledger fee = {format_currency(fee)}")
 
         elif tool_name == "get_adjustments":
             count = result.get("count", 0)
@@ -949,7 +1074,7 @@ class AgentController:
                 typ = r.get("adjustment_type")
                 amt = r.get("amount")
                 if amt is not None:
-                    evidence.append(f"  Adjustment ({typ}): ₹{amt:,} ({r.get('reason')})")
+                    evidence.append(f"  Adjustment ({typ}): {format_currency(amt)} ({r.get('reason')})")
 
         elif tool_name in ["calculate_expected_settlement", "calculate_adjusted_expected_settlement"]:
             calc = result.get("calculation")
@@ -963,7 +1088,7 @@ class AgentController:
             for r in records:
                 amt = r.get("credited_amount")
                 if amt is not None:
-                    evidence.append(f"  {r.get('bank_reference')}: credited ₹{amt:,}")
+                    evidence.append(f"  {r.get('bank_reference')}: credited {format_currency(amt)}")
 
         elif tool_name == "check_for_duplicates":
             count = result.get("duplicate_count", 0)
@@ -978,8 +1103,36 @@ def create_agent_controller(
     adjustments: Optional[List[Dict[str, Any]]] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    tracer: Optional[Any] = None,
 ) -> AgentController:
     """Factory function for creating an AgentController."""
     toolkit = FinancialToolkit(payments, ledger_records, bank_records, adjustments)
     llm_client = LLMClient(api_key=api_key, model=model)
-    return AgentController(toolkit=toolkit, llm_client=llm_client)
+    return AgentController(toolkit=toolkit, llm_client=llm_client, tracer=tracer)
+
+
+def create_multi_agent_controller(
+    payments: List[Dict[str, Any]],
+    ledger_records: List[Dict[str, Any]],
+    bank_records: List[Dict[str, Any]],
+    adjustments: Optional[List[Dict[str, Any]]] = None,
+    provider: Optional[str] = None,
+    api_key: Optional[str] = None,
+    investigator_model: Optional[str] = None,
+    verifier_model: Optional[str] = None,
+    tracer: Optional[Any] = None,
+) -> Any:
+    """Factory function for creating a MultiAgentOrchestrator."""
+    from src.agent.multi_agent.orchestrator import MultiAgentOrchestrator
+
+    toolkit = FinancialToolkit(payments, ledger_records, bank_records, adjustments)
+    return MultiAgentOrchestrator(
+        toolkit=toolkit,
+        provider=provider,
+        api_key=api_key,
+        investigator_model=investigator_model,
+        verifier_model=verifier_model,
+        tracer=tracer,
+    )
+
+

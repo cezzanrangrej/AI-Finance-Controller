@@ -1,217 +1,332 @@
 import React from 'react';
-import { Target, HelpCircle, CheckCircle } from 'lucide-react';
+import { Target, CheckCircle2, Cpu, Zap, Activity, Clock, Loader2, AlertCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 
-export default function EvaluationPanel({ metrics }) {
-  if (!metrics) return null;
+export default function EvaluationPanel({
+  metrics,
+  streamingState,
+  workflowState,
+  onRetry,
+}) {
+  const isUploading = workflowState === 'UPLOADING';
+  const isValidating = workflowState === 'VALIDATING';
+  const isStarting = workflowState === 'STARTING_RECONCILIATION';
+  const isRunningPhase1 = workflowState === 'RUNNING_PHASE_1';
+  const isRunningAI = workflowState === 'RUNNING_AI';
+  const isCompleted = workflowState === 'COMPLETED';
+  const isFailed = workflowState === 'FAILED';
 
-  const phase1Accuracy = metrics.phase1_accuracy ?? 100.0;
-  const phase2Accuracy = metrics.phase2_accuracy ?? metrics.ground_truth_accuracy ?? 100.0;
-  const precision = metrics.auto_resolution_precision ?? 100.0;
-  const recall = metrics.auto_resolution_recall ?? 100.0;
+  const totalRecords = metrics?.total_records ?? 100;
+  const initialReconciled = metrics?.initial_reconciled ?? 87;
+  const initialExceptions = metrics?.initial_exceptions ?? (totalRecords - initialReconciled);
+  const aiAutoResolved = metrics?.ai_auto_resolved ?? metrics?.ai_resolved ?? 0;
+  const humanReview = metrics?.human_review ?? (initialExceptions - aiAutoResolved);
 
-  const cards = [
-    {
-      title: 'Phase 1 Accuracy',
-      value: `${phase1Accuracy.toFixed(1)}%`,
-      badge: 'RULE ENGINE',
-      badgeColor: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-      description: 'Deterministic rule accuracy against ground truth.',
-      accent: 'border-l-4 border-l-emerald-500',
-    },
-    {
-      title: 'Phase 2 Decision Accuracy',
-      value: `${phase2Accuracy.toFixed(1)}%`,
-      badge: 'AI CONTROLLER',
-      badgeColor: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
-      description: 'Agreement between agent decision & synthetic ground truth.',
-      accent: 'border-l-4 border-l-purple-500',
-    },
-    {
-      title: 'Auto-Resolution Precision',
-      value: `${precision.toFixed(1)}%`,
-      badge: 'ZERO FALSE POSITIVES',
-      badgeColor: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
-      description: 'Correct auto-resolutions / total agent auto-resolutions.',
-      accent: 'border-l-4 border-l-indigo-500',
-    },
-    {
-      title: 'Auto-Resolution Recall',
-      value: `${recall.toFixed(1)}%`,
-      badge: 'EXPLAINABLE RECOVERY',
-      badgeColor: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
-      description: 'Correct auto-resolutions / total ground-truth explainable cases.',
-      accent: 'border-l-4 border-l-blue-500',
-    },
-  ];
+  const initialMatchRate = metrics?.initial_match_rate ?? ((initialReconciled / totalRecords) * 100);
+  const finalResolutionRate = metrics?.final_resolution_rate ?? (((initialReconciled + aiAutoResolved) / totalRecords) * 100);
+  const aiResolutionRate = metrics?.ai_resolution_rate ?? (initialExceptions > 0 ? (aiAutoResolved / initialExceptions) * 100 : 0);
 
-  const isAggregate = Boolean(metrics.evaluation_runs_total && metrics.evaluation_runs_total > 1);
-  const runsTotal = metrics.evaluation_runs_total || 1;
-  const casesPerRun = metrics.llm_cases_selected || 5;
-  const totalEvaluated = isAggregate
-    ? (metrics.llm_cases_completed ?? (casesPerRun * runsTotal))
-    : (metrics.llm_cases_completed ?? metrics.llm_cases_selected ?? 5);
+  const hasGroundTruth = Boolean(metrics?.has_ground_truth || metrics?.ground_truth_accuracy != null || metrics?.phase2_accuracy != null);
+  const phase2Accuracy = metrics?.phase2_accuracy ?? metrics?.ground_truth_accuracy;
+  const precision = metrics?.auto_resolution_precision;
+  const recall = metrics?.auto_resolution_recall;
 
-  const scopeText = isAggregate
-    ? `${runsTotal} runs × ${casesPerRun} cases = ${totalEvaluated} / ${metrics.initial_exceptions || 30} exceptions`
-    : metrics.llm_cases_selected
-    ? `${metrics.llm_cases_selected} / ${metrics.initial_exceptions || 30} exceptions`
-    : metrics.initial_exceptions
-    ? `All ${metrics.initial_exceptions} exceptions`
-    : null;
+  const batchList = streamingState?.batches ? Object.values(streamingState.batches) : [];
 
   return (
-    <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 gap-2">
-        <div className="flex items-center gap-2">
-          <Target className="h-5 w-5 text-indigo-400" />
-          <h2 className="text-base font-bold text-slate-100">
-            {isAggregate ? 'Aggregate Evaluation & Measured Accuracy' : 'Evaluation & Measured Accuracy'}
-          </h2>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-          <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700/60">
-            AI Provider: <strong className="text-indigo-400">{metrics.llm_provider ? metrics.llm_provider.toUpperCase() : 'DEMO'}</strong>
-          </span>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700/60">
-            Mode: <strong className={metrics.llm_mode === 'REAL_LLM' ? 'text-emerald-400' : 'text-amber-400'}>
-              {isAggregate ? 'AGGREGATE REAL LLM' : metrics.llm_mode === 'REAL_LLM' ? 'REAL LLM' : 'Offline Demo'}
-            </strong>
-          </span>
-          {metrics.llm_model && (
-            <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700/60">
-              Model: <strong className="text-purple-400">{metrics.llm_model}</strong>
-            </span>
-          )}
-          {isAggregate && (
-            <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700/60">
-              Runs: <strong className="text-amber-400">{runsTotal}</strong>
-            </span>
-          )}
-          {scopeText && (
-            <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700/60">
-              Evaluation scope: <strong className="text-cyan-400">{scopeText}</strong>
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((c, idx) => (
-          <div
-            key={idx}
-            className={`bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col justify-between ${c.accent}`}
-          >
-            <div>
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <span className="text-xs font-semibold text-slate-300">{c.title}</span>
-                <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${c.badgeColor}`}>
-                  {c.badge}
-                </span>
-              </div>
-              <div className="text-2xl font-extrabold font-mono text-slate-100 mt-2">
-                {c.value}
+    <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-6 shadow-xs">
+      
+      {/* 1. UPLOADING STATE */}
+      {isUploading && (
+        <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  Uploading Source Datasets
+                </h3>
+                <p className="text-xs text-slate-600 font-mono">
+                  Streaming source CSV files to server...
+                </p>
               </div>
             </div>
-            <p className="text-xs text-slate-400 mt-3 font-medium leading-relaxed">
-              {c.description}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {/* Per-Run Summary Table if aggregate runs present */}
-      {metrics.per_run_summaries && metrics.per_run_summaries.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
-              Per-Run Evaluation Breakdown ({metrics.per_run_summaries.length} Sequential Runs)
-            </h3>
-          </div>
-          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70">
-            <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-slate-900/80 text-slate-400 border-b border-slate-800">
-                <tr>
-                  <th className="px-4 py-2.5 font-semibold">Run</th>
-                  <th className="px-4 py-2.5 font-semibold">Evaluated</th>
-                  <th className="px-4 py-2.5 font-semibold">Auto-Resolved</th>
-                  <th className="px-4 py-2.5 font-semibold">Human Review</th>
-                  <th className="px-4 py-2.5 font-semibold">Accuracy</th>
-                  <th className="px-4 py-2.5 font-semibold">Precision</th>
-                  <th className="px-4 py-2.5 font-semibold">Recall</th>
-                  <th className="px-4 py-2.5 font-semibold">Time</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {metrics.per_run_summaries.map((r, i) => (
-                  <tr key={i} className="hover:bg-slate-900/40">
-                    <td className="px-4 py-2 text-indigo-400 font-bold">Run {r.run_number || i + 1}</td>
-                    <td className="px-4 py-2 text-slate-300">{r.cases_completed ?? r.cases_selected}</td>
-                    <td className="px-4 py-2 text-emerald-400">{r.auto_resolved}</td>
-                    <td className="px-4 py-2 text-amber-400">{r.human_review}</td>
-                    <td className="px-4 py-2 text-purple-400 font-semibold">{r.decision_accuracy ? `${r.decision_accuracy.toFixed(1)}%` : '100.0%'}</td>
-                    <td className="px-4 py-2 text-slate-300">{r.auto_resolution_precision ? `${r.auto_resolution_precision.toFixed(1)}%` : '100.0%'}</td>
-                    <td className="px-4 py-2 text-slate-300">{r.auto_resolution_recall ? `${r.auto_resolution_recall.toFixed(1)}%` : '100.0%'}</td>
-                    <td className="px-4 py-2 text-slate-400">{r.phase2_time_sec ? `${r.phase2_time_sec.toFixed(3)}s` : '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-blue-100 text-blue-800 border border-blue-200">
+              Uploading
+            </span>
           </div>
         </div>
       )}
 
-      {/* Investigation Mode Performance Comparison */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
-            Investigation Mode Architecture
-          </h3>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-            OPTIMIZED BATCH PREFETCH SUPPORTED
-          </span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
-          <div className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-3.5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-200">Individual Agent Mode</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/30">Interactive</span>
+      {/* 2. VALIDATING STATE */}
+      {isValidating && (
+        <div className="bg-purple-50/70 border border-purple-200 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  Validating Invariants
+                </h3>
+                <p className="text-xs text-slate-600 font-mono">
+                  Checking schema columns and Decimal precision invariants...
+                </p>
+              </div>
             </div>
-            <p className="text-slate-400 text-[11px] font-sans">
-              Dynamic multi-turn tool calling with transaction-scoped deduplication and early proof termination.
-            </p>
-            <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] text-slate-300">
-              <div>Scope: <strong className="text-slate-100">1 case / loop</strong></div>
-              <div>Safety: <strong className="text-slate-100">Max 5 Tools</strong></div>
-            </div>
-          </div>
-          <div className="bg-slate-950/80 border border-indigo-900/40 rounded-xl p-3.5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-indigo-300">Batch Investigation Mode</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">High Throughput</span>
-            </div>
-            <p className="text-slate-400 text-[11px] font-sans">
-              Prefetches deterministic calculations in Python, evaluating 5–10 exceptions per structured interaction with individual fallback.
-            </p>
-            <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] text-slate-300">
-              <div>Batch Size: <strong className="text-emerald-400">5 – 10 cases</strong></div>
-              <div>Fallback: <strong className="text-emerald-400">Automatic Per-Case</strong></div>
-            </div>
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
+              Validating
+            </span>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex items-start gap-3 text-xs text-slate-400">
-        <HelpCircle className="h-4 w-4 text-indigo-400 flex-shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="text-slate-300 font-semibold">Evaluation Methodology Note:</p>
-          <p>
-            Precision measures whether the agent auto-resolves only truly explainable cases (zero false resolutions).
-            Recall measures the agent's ability to discover valid settlement adjustments present in source files.
-            Aggregate metrics are computed directly across all evaluated cases.
+      {/* 3. STARTING_RECONCILIATION STATE */}
+      {isStarting && (
+        <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Loader2 className="h-5 w-5 text-amber-600 animate-spin" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  Starting Reconciliation
+                </h3>
+                <p className="text-xs text-slate-600 font-mono">
+                  Initializing reconciliation pipeline and worker threads...
+                </p>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
+              Initializing
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* 4. RUNNING_PHASE_1 STATE */}
+      {isRunningPhase1 && (
+        <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Loader2 className="h-5 w-5 text-amber-600 animate-spin" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  Phase 1 Execution
+                </h3>
+                <p className="text-xs text-slate-600 font-mono">
+                  Phase 1: Deterministic Double-Entry Engine reconciling 4-source records...
+                </p>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
+              Phase 1 Engine
+            </span>
+          </div>
+
+          <div className="w-full bg-amber-200/60 h-2 rounded-full overflow-hidden">
+            <div className="bg-amber-500 h-full w-1/3 animate-pulse rounded-full" />
+          </div>
+        </div>
+      )}
+
+      {/* 2. RUNNING_AI STATE (Progressive SSE Execution & Compact Batch Tracker) */}
+      {(isRunningAI || (streamingState && streamingState.isStreaming)) && (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-5 space-y-4">
+          
+          {/* Phase 1 Complete Summary Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-800">
+                Phase 1 Complete
+              </span>
+              <span className="text-xs font-mono text-slate-600">
+                ({totalRecords} records processed · {initialReconciled} reconciled · <strong>{initialExceptions} exceptions detected</strong>)
+              </span>
+            </div>
+
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold self-start sm:self-auto">
+              Auto-Queued {streamingState?.totalCases || initialExceptions} Cases
+            </span>
+          </div>
+
+          {/* AI Investigation Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 text-emerald-600 animate-spin" />
+              <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                AI Parallel Investigation
+              </span>
+              <span className="text-xs font-mono text-slate-500">
+                ({streamingState?.totalBatches || 3} batches running in parallel)
+              </span>
+            </div>
+
+            <div className="text-xs font-mono text-slate-700">
+              <strong>{streamingState?.casesCompleted || 0}</strong> / {streamingState?.totalCases || initialExceptions} cases completed
+            </div>
+          </div>
+
+          {/* Compact Progress Bar */}
+          <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+            <div
+              className="bg-emerald-500 h-full transition-all duration-300 rounded-full"
+              style={{
+                width: `${streamingState?.totalCases ? Math.min(100, ((streamingState.casesCompleted || 0) / streamingState.totalCases) * 100) : 0}%`,
+              }}
+            />
+          </div>
+
+          {/* Compact Batch Status Chips */}
+          {batchList.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-xs">
+              {batchList.map((b) => (
+                <div
+                  key={b.batchNumber}
+                  className={`px-3 py-1.5 rounded-md border flex items-center gap-2 transition-all ${
+                    b.status === 'COMPLETED'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : b.status === 'RUNNING'
+                      ? 'bg-amber-50 border-amber-300 text-amber-900 animate-pulse'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  {b.status === 'COMPLETED' ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
+                  ) : b.status === 'RUNNING' ? (
+                    <Loader2 className="h-3.5 w-3.5 text-amber-600 animate-spin flex-shrink-0" />
+                  ) : (
+                    <span className="h-2 w-2 rounded-full bg-slate-300" />
+                  )}
+                  <span className="font-semibold">Batch #{b.batchNumber}</span>
+                  <span className="text-[11px] text-slate-500">({b.caseCount} cases)</span>
+                  {b.durationSec && <span className="text-[10px] text-emerald-700 font-bold">{b.durationSec.toFixed(2)}s</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. FAILED STATE */}
+      {isFailed && (
+        <div className="bg-rose-50 border border-rose-200 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-rose-800 font-bold text-sm">
+              <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0" />
+              <span>Reconciliation Failed</span>
+            </div>
+            <button
+              onClick={onRetry}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-md shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Retry</span>
+            </button>
+          </div>
+          <p className="text-xs text-rose-700 font-mono">
+            {metrics?.error || streamingState?.error || 'An unexpected error occurred during parallel investigation.'}
           </p>
         </div>
-      </div>
+      )}
+
+      {/* 4. FINAL COMPLETED RESULTS & METRICS SUMMARY */}
+      {(isCompleted || (!isRunningPhase1 && !isRunningAI && metrics)) && (
+        <div className="space-y-6">
+          
+          {/* Completion Banner */}
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                  Reconciliation Complete
+                </h3>
+              </div>
+              <p className="text-xs text-emerald-800 font-mono mt-1">
+                <strong>{totalRecords}</strong> records processed · <strong>{initialReconciled}</strong> initial match · <strong>{initialExceptions}</strong> exceptions investigated
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs font-mono">
+              <div className="bg-white px-3 py-1.5 rounded border border-emerald-200 text-emerald-800">
+                AI Auto-Resolved: <strong>{aiAutoResolved}</strong>
+              </div>
+              <div className="bg-white px-3 py-1.5 rounded border border-amber-200 text-amber-800">
+                Human Review: <strong>{humanReview}</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Operational Metrics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+                Initial Match Rate
+              </span>
+              <div className="text-2xl font-bold font-mono text-slate-900">
+                {initialMatchRate.toFixed(1)}%
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Phase 1 double-entry match rate.</p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+                Final Resolution Rate
+              </span>
+              <div className="text-2xl font-bold font-mono text-emerald-700">
+                {finalResolutionRate.toFixed(1)}%
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Total resolved (Phase 1 + AI auto-resolved).</p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+                AI Exception Resolution
+              </span>
+              <div className="text-2xl font-bold font-mono text-emerald-700">
+                {aiResolutionRate.toFixed(1)}%
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Exceptions resolved with financial proof.</p>
+            </div>
+          </div>
+
+          {/* Ground Truth Benchmark Metrics (ONLY DISPLAYED IF GROUND TRUTH EXISTS) */}
+          {hasGroundTruth && (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+                  Ground Truth Benchmark Accuracy
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">
+                  Verified Ground Truth
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
+                <div className="bg-white p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 block font-sans">Decision Accuracy</span>
+                  <span className="text-lg font-bold text-slate-900">
+                    {phase2Accuracy != null ? `${Number(phase2Accuracy).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                <div className="bg-white p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 block font-sans">Precision (Zero False Positives)</span>
+                  <span className="text-lg font-bold text-emerald-700">
+                    {precision != null ? `${Number(precision).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                <div className="bg-white p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 block font-sans">Recall (Explainable Recovery)</span>
+                  <span className="text-lg font-bold text-emerald-700">
+                    {recall != null ? `${Number(recall).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
     </div>
   );
 }
-

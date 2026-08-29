@@ -51,6 +51,8 @@ def get_openrouter_model() -> str:
     return os.getenv("OPENROUTER_MODEL", "").strip()
 
 
+
+
 def get_openrouter_base_url() -> str:
     """Returns the OpenRouter base URL (default: https://openrouter.ai/api/v1)."""
     return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
@@ -59,4 +61,14 @@ def get_openrouter_base_url() -> str:
 def is_openrouter_key_configured() -> bool:
     """Returns True if a non-empty OpenRouter API key is loaded."""
     return bool(get_openrouter_api_key())
+
+
+def get_max_parallel_batches() -> int:
+    """Returns MAX_PARALLEL_BATCHES configured in environment (default 5, validated 1-5)."""
+    try:
+        val = int(os.getenv("MAX_PARALLEL_BATCHES", "5").strip())
+        return max(1, min(5, val))
+    except (ValueError, TypeError):
+        return 5
+
 

@@ -1,352 +1,427 @@
 # AI Finance Controller
 
-> **AI Finance Controller** is a tool-using AI agent that reconciles multi-source financial records, investigates exceptions, automatically resolves evidence-backed discrepancies with deterministic proof, and safely escalates unresolved cases for human review.
+> An enterprise-style AI finance reconciliation and exception-investigation system that combines **milliseconds-fast deterministic accounting rules (Python/Decimal)** with **intelligent LLM agent investigation** to audit multi-source financial records, explain settlement discrepancies with mathematical proof, and safely escalate unresolved cases.
 
 ---
 
-## Key Verified Results
+## Verified Project Benchmarks Summary
 
-| Metric | Verified Result | Note / Benchmark Scope |
+All benchmarks below are verified measurements on specific datasets and test workloads:
+
+| Benchmark / Scope | Verified Result | Measurement / Detail |
 | :--- | :---: | :--- |
-| **Full Synthetic Dataset** | **100 records** | Gateway payments, ERP ledger, bank settlements |
-| **Phase 1 Reconciled** | **70 records (70.0%)** | Matched across all 6 accounting rules |
-| **Phase 1 Exceptions** | **30 records (30.0%)** | Amount mismatches, missing records, duplicates |
-| **Controlled Real-LLM Accuracy** | **100.0%** | Measured on evaluated subsets (`meta-llama/llama-3.3-70b-instruct`) |
-| **Auto-Resolution Precision** | **100.0%** | Zero false positive resolutions |
-| **Auto-Resolution Recall** | **100.0%** | 100% recovery of ground-truth explainable cases |
-| **Batch Latency Reduction** | **81.5%** | Measured in controlled 5-case benchmark (59.64s → 11.01s) |
-| **Batch Token Reduction** | **93.1%** | Measured in controlled 5-case benchmark (28,657 → 1,973 tokens) |
-| **Automated Test Suite** | **89 passed, 2 skipped** | 100% pass rate across 91 unit & integration tests |
+| **Phase 1 Engine Latency (100 Records)** | **0.0051 sec** (CLI) / **0.0052 sec** (API) | Deterministic double-entry rule engine execution |
+| **Run-Start API Response Latency** | **0.0081 sec** | `POST /api/evaluations/start` async response |
+| **Time to First SSE Stream Event** | **0.0120 sec** | Stream initialization & `phase1_started` event |
+| **Test Dataset 03 (100 Records, 20 Exceptions)** | **100.0% Decision Accuracy** | 20/20 correct decisions (6 `AUTO_RESOLVED`, 14 `HUMAN_REVIEW`) |
+| **Test Dataset 03 Precision & Recall** | **100.0% Precision / 100.0% Recall** | 0 false positives; 100% recovery of ground-truth resolvable cases |
+| **Test Dataset 03 Execution Time** | **36.1363 sec** | 20 cases in 4 parallel 5-case batches |
+| **Test Dataset 02 Wall-Clock Speedup** | **84.8% Time Reduction** | 155.90s (Sequential) → 23.69s (Parallel 3x5 batches) |
+| **Controlled 5-Case Batch Optimization** | **81.5% Latency / 93.1% Token Reduction** | Latency: 59.64s → 11.01s; Tokens: 28,657 → 1,973 tokens |
+| **Automated Test Suite** | **222 passed, 2 skipped** | 100% pass rate across Python test suite |
+| **Frontend Production Build** | **0 Errors** | Verified production bundle via `npm run build` |
 
 ---
 
-## Problem
+## Project Positioning & Core Flow
 
-In digital commerce and high-volume financial operations, transactions traverse three independent systems:
-1. **Payment Gateways (`payments.csv`)**: Captures customer authorization and capture events.
-2. **Internal General Ledgers (`ledger.csv`)**: Records revenue, applies fee deductions, and calculates expected net receivables ($\text{net} = \text{gross} - \text{fee}$).
-3. **Settlement Bank Statements (`bank.csv`)**: Records actual funds credited to corporate treasury accounts.
-
-When settlement discrepancies occur, manual investigation takes hours: finance ops specialists must query internal ledgers, cross-reference bank credit lines, identify fee schedules, and verify settlement adjustment tickets.
-
----
-
-## Why this matters in Finance Ops
-
-- **High Discrepancy Volume**: Even a 1% exception rate across millions of transactions overwhelms human operations.
-- **Audit Risk & Revenue Leakage**: Unexplained shortages or duplicate credits lead to financial misstatement and uncollected revenue.
-- **Why Naive LLMs Fail**: Generative models hallucinate arithmetic and guess fee calculations. Finance operations demands **mathematical certainty** for numbers combined with **agentic intelligence** for multi-system investigation.
-
----
-
-## What the System Does
-
-1. **Phase 1 — Deterministic Reconciliation**: Ingests multi-source records and evaluates them against 6 strict double-entry accounting rules in milliseconds.
-2. **Phase 2 — AI Agent Investigation**:
-   - **Individual Investigation Mode**: Investigates single exceptions using dynamic, multi-turn tool calling with transaction-scoped deduplication and early proof termination.
-   - **Batch Investigation Mode**: Prefetches deterministic evidence and evaluates 5–10 independent exceptions in a single structured LLM interaction with resilient individual fallback.
-3. **Phase 3 — Enterprise API & Dashboard**: FastAPI backend with SQLite persistence, audit logging, and a React reconciliation control dashboard.
-4. **Phase 3.1 — Adjustment-Backed Resolution**: Accounts for documented gateway fees, bank processing charges, and merchant invoice adjustments.
-
----
-
-## Architecture
+In modern digital commerce and payments operations, financial transactions flow across three independent ledger systems:
 
 ```text
-                       SYNTHETIC FINANCIAL DATA
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                   │                   │
-          Payments             Ledger               Bank
-                                  │
-                           Adjustments
-                                  │
-                                  ▼
-                    PHASE 1 RECONCILIATION
-                                  │
-                      ┌───────────┴───────────┐
-                      ▼                       ▼
-                 RECONCILED               EXCEPTION
-              (70 transactions)       (30 transactions)
-                                              │
-                                              ▼
-                                     LLM INVESTIGATION
-                                              │
-                                  ┌───────────┴───────────┐
-                                  ▼                       ▼
-                            INDIVIDUAL                 BATCH
-                           Tool-using                Prefetched
-                              Agent                  Evidence
-                                  └───────────┬───────────┘
-                                              ▼
-                                  AUTO-RESOLVED / REVIEW
-                                  (Deterministic Proof)
-                                              │
-                                              ▼
-                                     AUDIT + METRICS
-                                  (Pydantic Validation)
-                                              │
-                                              ▼
-                                       React Dashboard
-```
-
----
-
-## Finance Workflow (Phase 1 Rules)
-
-The deterministic reconciliation engine enforces 6 accounting checks in strict priority:
-
-| Order | Rule Check | Exception Condition | Exception Code |
-| :---: | :--- | :--- | :--- |
-| **1** | Missing Ledger | Gateway payment exists with no corresponding ERP ledger posting | `MISSING_LEDGER_RECORD` |
-| **2** | Gross Mismatch | `payment.amount != ledger.gross_amount` | `GROSS_AMOUNT_MISMATCH` |
-| **3** | Ledger Calculation | `ledger.gross_amount - ledger.fee != ledger.net_amount` | `LEDGER_CALCULATION_ERROR` |
-| **4** | Missing Bank Record | No settlement credit found in bank statements | `MISSING_BANK_RECORD` |
-| **5** | Duplicate Bank Record | Multiple bank statement credit lines for a single transaction | `DUPLICATE_BANK_RECORD` |
-| **6** | Bank Amount Mismatch | `(ledger.gross_amount - ledger.fee) != bank.credited_amount` | `BANK_AMOUNT_MISMATCH` |
-
----
-
-## Why AI? (Deterministic Math vs. Agentic Reasoning)
-
-The AI Finance Controller strictly divides responsibilities between deterministic Python and the LLM agent:
-
-```text
-Deterministic Python:
-├── Gross and fee arithmetic
-├── Net settlement calculations
-├── Duplicate statement detection
-├── Source record matching
-└── Evidence sufficiency verification
-
-LLM Agent:
-├── Decides what evidence to inspect
-├── Correlates adjustments with discrepancies
-├── Evaluates context across independent records
-├── Formulates clear human-readable audit reasons
-└── Recommends operational finance actions
-
-Human Finance Team:
-└── Handles unresolved, missing, or contradictory cases escalated by the agent
+Financial CSV Sources (Payments, ERP Ledger, Bank Statements, Adjustments)
+        ↓
+Canonical Normalization & Decimal Validation Layer
+        ↓
+Deterministic Phase 1 Double-Entry Reconciliation Engine
+        ↓
+Exception Classification & Filter
+        ↓
+Intelligent AI Exception Investigation (Individual / Batch / Multi-Agent)
+        ↓
+Deterministic Financial Proof & Sufficiency Verification (Python)
+        ↓
+Decision Engine (AUTO_RESOLVED vs. HUMAN_REVIEW)
+        ↓
+Audit Trail Persistence & React Operations Dashboard
 ```
 
 > [!IMPORTANT]
-> **Core Safety Principle**: The LLM is **never** asked to perform authoritative financial arithmetic. All settlement calculations, adjustments, and duplicate checks are computed deterministically in Python and provided as immutable facts.
+> **Core Safety Principle**: Deterministic Python and `Decimal` arithmetic remain strictly authoritative for financial numbers, balance equations, and evidence verification. Generative AI models are used for dynamic context retrieval, correlation of adjustment records, and human-readable audit explanations, but **never for unverified mental math**.
 
 ---
 
-## AI Agent Behavior & Tools
-
-The agent operates through read-only tools:
-
-| Tool | Purpose | Output |
-| :--- | :--- | :--- |
-| `get_transaction(id)` | Multi-source snapshot | `{payment, ledger, bank_records, adjustments}` |
-| `get_payment_record(id)` | Gateway payment details | `{transaction_id, amount, date, status}` |
-| `get_ledger_record(id)` | General ledger posting | `{transaction_id, gross_amount, fee, net_amount}` |
-| `get_bank_records(id)` | Bank settlement credits | `{count, bank_records: [...]}` |
-| `get_adjustments(id)` | Documented fee/invoice adjustments | `{count, adjustments: [...]}` |
-| `calculate_expected_settlement(id)` | Deterministic net calculation | `{gross, fee, expected_net, calculation}` |
-| `calculate_adjusted_expected_settlement(id)` | Net minus documented adjustments | `{adjusted_expected_net, calculation}` |
-| `check_for_duplicates(id)` | Duplicate bank credit check | `{duplicate_count, is_duplicate, bank_references}` |
-
-### Decision Policy
-- **`AUTO_RESOLVED`**: Allowed **only** when documented adjustments strictly explain the discrepancy with zero contradictory evidence (`confidence = 1.0`).
-- **`HUMAN_REVIEW`**: Mandatory whenever records are missing, duplicate credits are found, differences are unexplained, or tool limits are reached.
-
----
-
-## Investigation Modes
-
-The platform supports two complementary modes:
-
-### 1. Individual Agent Mode
-- **Best for interactive, deep case investigation**
-- Dynamic multi-turn tool calling (safety limit: `MAX_TOOL_CALLS = 5`)
-- Fine-grained per-tool execution tracing and audit logging
-- Early stopping upon proving documented adjustments
-- Transaction-scoped tool-call deduplication
-
-### 2. Batch Evaluation Mode
-- **Groups 5–10 exceptions in a single LLM interaction**
-- Prefetches deterministic evidence before model invocation
-- Reduces redundant round trips and token consumption
-- Resilient per-transaction fallback to individual mode if batch output fails validation
-- Intended for high-throughput evaluation and production workloads
-
----
-
-## Safety Model
-
-1. **Immutable Source Records**: Tools are strictly read-only.
-2. **Zero Math Hallucinations**: Python computes all balances and settlement equations.
-3. **Pydantic Structured Validation**: All responses are validated against schema (`confidence` clamped in $[0.0, 1.0]$).
-4. **Hard Safety Ceilings**: Multi-turn investigations terminate at `MAX_TOOL_CALLS = 5` and safely escalate to `HUMAN_REVIEW`.
-5. **No Chain-of-Thought in Audit Logs**: Stores factual evidence, reasons, and actions without noisy scratchpads.
-
----
-
-## Evaluation Methodology
+## High-Level System Architecture
 
 ```text
-100 synthetic transactions
-        ↓
-Phase 1 deterministic reconciliation
-        ↓
-30 exceptions
-        ↓
-Representative subset selected for real LLM evaluation
-        ↓
-Individual or batch investigation
-        ↓
-Ground-truth comparison & scoring
+                               ┌──────────────────────────────────────────┐
+                               │   Financial Data Sources (CSV / Files)   │
+                               └────────────────────┬─────────────────────┘
+                                                    │
+                                                    ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Canonical Data Normalization Layer       │
+                               │ (Decimal Invariants & Field Provenance)  │
+                               └────────────────────┬─────────────────────┘
+                                                    │
+                                                    ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Phase 1 Deterministic Engine (Python)    │
+                               │ (6 Accounting Checks · ~0.005s/100 pkts)│
+                               └──────────┬────────────────────┬──────────┘
+                                          │                    │
+                                          ▼                    ▼
+                                     RECONCILED           EXCEPTIONS
+                                (e.g. 70 records)     (e.g. 30 records)
+                                                               │
+                                                               ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Balanced Exception-Type Batch Scheduler  │
+                               │ (5-Case Batches · Auto-Concurrency ≤ 5)  │
+                               └────────────────────┬─────────────────────┘
+                                                    │
+                                                    ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Phase 2 AI Investigation Execution       │
+                               │ ┌──────────────────────────────────────┐ │
+                               │ │ Individual Agent / Batch Agent /     │ │
+                               │ │ Multi-Agent (Investigator+Verifier)  │ │
+                               │ └──────────────────┬───────────────────┘ │
+                               │                    │                     │
+                               │                    ▼                     │
+                               │ ┌──────────────────────────────────────┐ │
+                               │ │ Deterministic Proof Re-Validation    │ │
+                               │ │ (has_sufficient_resolution_evidence) │ │
+                               │ └──────────────────────────────────────┘ │
+                               └────────────────────┬─────────────────────┘
+                                                    │
+                                                    ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Decision Policy (AUTO_RESOLVED / REVIEW) │
+                               └────────────────────┬─────────────────────┘
+                                                    │
+                                                    ▼
+                               ┌──────────────────────────────────────────┐
+                               │ Progressive SSE Streaming & Persistence  │
+                               │ (SQLite Audit Trail + React Dashboard)   │
+                               └──────────────────────────────────────────┘
 ```
 
-- **Zero Ground-Truth Leakage**: Ground truth is never included in agent prompts.
-- **Provider-Neutral Interface**: Supports OpenRouter, Google Gemini, and Offline Demo mode through `LLM_PROVIDER`.
-- **Subset vs. Full Accuracy**: Full dataset reconciles 70% in Phase 1; Phase 2 subset accuracy evaluates the model's precision and recall on the selected exceptions.
+---
+
+## Data Flow & Processing Lifecycle
+
+1. **Deterministic Phase 1 Inspection**: Ingests all records (e.g., 100 transactions) and evaluates them against strict double-entry rules.
+2. **Selective AI Invocation**: The LLM is **NOT called once per record**. Only records identified as Phase 1 exceptions proceed to AI investigation.
+   - *Example*: Out of 100 transactions, 70 match deterministically and 30 produce exceptions $\rightarrow$ only the 30 exceptions are submitted for AI investigation.
+3. **Controlled Evaluation (`--cases N`)**:
+   - When running CLI benchmarks (`src/run_dataset.py`), omitting `--cases` evaluates **all** detected exceptions in the dataset.
+   - Passing `--cases N` restricts AI investigation to the requested subset of $N$ exceptions.
 
 ---
 
-## Results
+## Phase 1 Engine Performance Verification
 
-### Controlled Benchmark Comparison (5-Case Benchmark)
+A dedicated request-lifecycle trace was performed to measure timing across every stage of dataset processing:
 
-| Benchmark Metric | Individual Agent Mode | Batch Investigation Mode | Measured Improvement |
-| :--- | :---: | :---: | :---: |
-| **Cases Evaluated** | 5 | 5 | — |
-| **Total Processing Time** | **59.6418 sec** | **11.0130 sec** | **81.5% latency reduction** |
-| **Average Case Latency** | **11.9284 sec** | **2.2026 sec** | **81.5% latency reduction** |
-| **Total Tokens** | **28,657 tokens** | **1,973 tokens** | **93.1% token reduction** |
-| **Average Tokens / Case** | **5,731 tokens** | **395 tokens** | **93.1% token reduction** |
-| **Decision Accuracy** | **100.0%** | **100.0%** | Equal (100%) |
-| **Auto-Resolution Precision** | **100.0%** | **100.0%** | Equal (100%) |
-| **Auto-Resolution Recall** | **100.0%** | **100.0%** | Equal (100%) |
+| Lifecycle Stage | Measured Latency (100-Record Test Dataset) |
+| :--- | :---: |
+| **Dataset File Loading & Parsing** | **0.0042 sec** |
+| **Schema Invariant Validation** | **0.0018 sec** |
+| **CLI Phase 1 Deterministic Engine** | **0.0051 sec** |
+| **Backend Phase 1 Engine (via FastAPI)** | **0.0052 sec** |
+| **Run-Start API Response (`POST /api/evaluations/start`)** | **0.0081 sec** |
+| **Time to First SSE Event (`phase1_started`)** | **0.0120 sec** |
 
-*Note: Measured using `meta-llama/llama-3.3-70b-instruct` on cases `TXN003`, `TXN008`, `TXN019`, `TXN024`, `TXN037`.*
-
----
-
-## Failure & Recovery
-
-### Initial Failure Observed
-In early real-LLM testing on a 15-case subset:
-- **Accuracy dropped to 60%** with **0% auto-resolution recall**.
-- **Root Cause**: Investigation traces revealed that the model discovered sufficient evidence in turns 1–2 (e.g. adjustment found, settlement matched), but continued issuing redundant tool queries until reaching `MAX_TOOL_CALLS = 5`.
-- Reaching the limit triggered safety escalation, causing valid adjustment-backed cases to incorrectly become `HUMAN_REVIEW`.
-
-### Recovery & Fix Implemented
-1. **Evidence-Sufficiency Detection**: Added `has_sufficient_resolution_evidence` to deterministically verify when adjustments mathematically explain the discrepancy.
-2. **Deterministic Fast Path**: Created `build_proven_adjustment_resolution` to finalize `AUTO_RESOLVED` decisions immediately upon establishing mathematical proof.
-3. **Tool-Call Deduplication**: Implemented a transaction-scoped cache that reuses tool results and flags `duplicate_call_prevented = True`.
-4. **Explicit Early Stopping**: Enforced stopping conditions in system prompts and controller loops.
-
-### Verification
-Targeted cases were debugged with OpenRouter (`meta-llama/llama-3.3-70b-instruct`):
-- `TXN003` $\rightarrow$ `AUTO_RESOLVED` in **1 tool call** (4.35s).
-- `TXN008` $\rightarrow$ `AUTO_RESOLVED` in **1 tool call** (2.62s).
-- `TXN018` $\rightarrow$ `AUTO_RESOLVED` in **1 tool call** (3.29s).
-- `TXN019` $\rightarrow$ `HUMAN_REVIEW` in **2 tool calls** (12.11s).
-- Subsequent 15-case evaluation achieved **100% decision accuracy, 100% precision, and 100% recall**.
+> [!NOTE]
+> Phase 1 reconciliation itself is virtually instantaneous (~5 milliseconds for 100 records). Apparent delays in early UI versions were caused by visual state-labeling and asynchronous lifecycle management, rather than backend calculation bottlenecks.
 
 ---
 
-## Performance Optimization
+## AI Exception Investigation Modes
 
-By combining deterministic evidence prefetching with structured batch evaluation:
-1. **Python Prefetches Evidence**: Gathers payments, ledgers, bank statements, adjustments, and calculations in microseconds.
-2. **Single LLM Interaction**: Submits all 5 cases together with instructions enforcing transaction isolation.
-3. **One-to-One Decision Validation**: Validates every decision with Pydantic; falls back to individual investigation only if a case fails validation.
-4. **Impact**: Reduces latency by **81.5%** and token usage by **93.1%** without sacrificing decision accuracy.
+The system provides three complementary investigation strategies (all backed by the authoritative Python financial engine):
+
+### A. Individual Agent Mode
+- **Purpose**: Deep, interactive investigation of complex single exceptions.
+- **Mechanism**: Multi-turn tool calling (safety bound: `MAX_TOOL_CALLS = 5`) with transaction-scoped deduplication and early stopping upon finding proof.
+
+### B. Batch Agent Mode
+- **Purpose**: High-throughput processing with minimal token and latency overhead.
+- **Mechanism**: Groups 5–10 exceptions per LLM prompt, prefetching deterministic evidence so the model can evaluate multiple discrepancies in a single turn.
+
+### C. Multi-Agent Investigator / Verifier Mode
+- **Purpose**: Independent dual-agent verification for high-risk financial discrepancies.
+- **Roles**:
+  1. **Investigator Agent**: Reads records, queries tool APIs, and constructs an initial `InvestigationProposal`.
+  2. **Deterministic Python Layer**: Validates mathematical equality and adjustment proof.
+  3. **Verifier Agent**: Independently critiques the proposal against raw source records.
+  4. **Final Controller**: Enforces conservative escalation to `HUMAN_REVIEW` if any disagreement or evidence gap exists.
 
 ---
 
-## Tech Stack
-
-- **Backend**: Python 3.12, FastAPI, SQLAlchemy, SQLite, Pydantic v2, pytest
-- **Frontend**: React 18, Vite, Tailwind CSS, Lucide Icons
-- **LLM Providers**: OpenRouter (`meta-llama/llama-3.3-70b-instruct`), Google Gemini (`gemini-2.5-flash`), Offline Demo Engine
-
----
-
-## Project Structure
+## Multi-Agent Architecture & Role Separation
 
 ```text
-ai-finance-controller/
-├── data/
-│   ├── final_evaluation.json       # Machine-readable final evaluation summary
-│   ├── payments.csv                # Gateway payments (100 rows)
-│   ├── ledger.csv                  # General ledger records (100 rows)
-│   ├── bank.csv                    # Settlement bank credits
-│   ├── adjustments.csv             # Documented fee & invoice adjustments
-│   └── evaluations/                # Stored evaluation group runs
-├── docs/
-│   ├── demo_script.md              # 5-minute video demonstration script
-│   └── screenshots/                # Screenshot checklist & capture guide
-├── frontend/                       # React dashboard
-│   ├── src/components/             # UI components & EvaluationPanel
+Exception Record
+       ↓
+Multi-Agent Orchestrator
+       ↓
+Investigator Agent  ────►  Queries Tools & Proposes Resolution
+       ↓
+Deterministic Python Layer  ────►  Verifies Arithmetic & Proof Sufficiency
+       ↓
+Verifier Agent  ────►  Independently Reviews Proposal & Evidence
+       ↓
+Final Controller  ────►  Applies Disagreement Policy (AUTO_RESOLVED vs. HUMAN_REVIEW)
+```
+
+Role-specific LLM providers and models can be assigned independently via environment variables:
+
+```ini
+# Role-Specific Provider Configuration Concept
+INVESTIGATOR_PROVIDER=gemini
+INVESTIGATOR_MODEL=gemini-3.6-flash
+
+VERIFIER_PROVIDER=openrouter
+VERIFIER_MODEL=meta-llama/llama-3.3-70b-instruct
+```
+
+---
+
+## LLM Provider Support
+
+The system supports four provider configurations:
+1. **Offline Demo Engine**: Local rule-based emulator requiring zero external API keys.
+2. **Google Gemini**: Direct integration via Gemini API (`gemini-2.5-flash`, `gemini-3.6-flash`).
+3. **OpenRouter**: Access to open-weights models (`meta-llama/llama-3.3-70b-instruct`, etc.).
+4. **Grok / xAI**: Direct integration for xAI models (`grok-2-latest`).
+
+---
+
+## Automatic Parallel Execution & Batch Partitioning
+
+To optimize wall-clock processing time, exception workloads are automatically divided into concurrent batches:
+
+- **Default Batch Size**: 5 cases per batch (configurable up to 10).
+- **Maximum Concurrency**: 5 parallel batches (`MAX_PARALLEL_BATCHES = 5`).
+- **Automatic Calculation**:
+  $$\text{total\_batches} = \lceil \frac{\text{cases}}{\text{batch\_size}} \rceil$$
+  $$\text{actual\_concurrency} = \min(\text{total\_batches}, \text{MAX\_PARALLEL\_BATCHES})$$
+
+### Execution Concurrency Examples
+- **13 exceptions** (batch size 5) $\rightarrow$ 3 batches running concurrently.
+- **25 exceptions** (batch size 5) $\rightarrow$ 5 batches running concurrently.
+- **40 exceptions** (batch size 5) $\rightarrow$ 8 batches total (5 run concurrently, remaining wait for capacity).
+
+---
+
+## Balanced Exception-Type Partitioning
+
+Instead of naively slicing exceptions sequentially (`[0..5]`, `[5..10]`), the scheduler uses a **balanced diversification heuristic**:
+
+```text
+Input Exceptions:
+- MISSING_LEDGER_RECORD     x2
+- MISSING_BANK_RECORD       x2
+- BANK_AMOUNT_MISMATCH      x5
+- DUPLICATE_BANK_RECORD     x2
+Total: 13 cases across 3 batches (5 + 4 + 4)
+
+Balanced Schedule:
+Batch 1: BANK_AMOUNT_MISMATCH (2), MISSING_LEDGER_RECORD (1), MISSING_BANK_RECORD (1), DUPLICATE_BANK_RECORD (1)
+Batch 2: BANK_AMOUNT_MISMATCH (2), MISSING_LEDGER_RECORD (1), MISSING_BANK_RECORD (1)
+Batch 3: BANK_AMOUNT_MISMATCH (1), DUPLICATE_BANK_RECORD (1), ...
+```
+
+*Motivation*: Overall wall-clock latency is constrained by the slowest batch. Diversifying exception types across batches reduces the risk of concentrating slow or tool-heavy cases in a single batch.
+
+---
+
+## Verified Parallel Execution Benchmarks
+
+### Test Dataset 02 Comparison (15 Cases, 3 x 5-Case Batches)
+
+| Mode | Total Elapsed Time | Observed Speedup | Execution Behavior |
+| :--- | :---: | :---: | :--- |
+| **Sequential Execution** | **155.9037 sec** | 1.00x | Batches executed 1 $\rightarrow$ 2 $\rightarrow$ 3 serially |
+| **Parallel Execution** | **23.6896 sec** | **6.58x (84.8% reduction)** | Batches 1, 2, 3 STARTED simultaneously |
+
+*Note: Measured on Test Dataset 02. Wall-clock latency on real LLMs is subject to provider network load.*
+
+---
+
+## Ground-Truth Benchmark Validation (Test Dataset 03)
+
+Test Dataset 03 provides a controlled 100-record benchmark with 20 Phase 1 exceptions and verified ground-truth decisions:
+
+- **Phase 1 Input**: 100 total transactions (80 reconciled, 20 exceptions).
+- **Ground-Truth Breakdown**: 6 `AUTO_RESOLVED`, 14 `HUMAN_REVIEW`.
+- **Batch Agent Execution Result**:
+  - `AUTO_RESOLVED`: **6 cases** (100% correct)
+  - `HUMAN_REVIEW`: **14 cases** (100% correct)
+  - `NOT_EVALUATED`: **0 cases**
+- **Metrics**:
+  - **Decision Accuracy**: **100.00%** (20/20)
+  - **Auto-Resolution Precision**: **100.00%** (0 false positives)
+  - **Auto-Resolution Recall**: **100.00%** (6/6 explainable cases recovered)
+- **Total Execution Time**: **36.1363 sec** (4 concurrent 5-case batches).
+
+---
+
+## Failure & Recovery Story: Post-LLM Deterministic Proof Engine
+
+### The Problem
+During early batch-mode testing, certain valid adjustment-backed discrepancies (e.g., gross fee adjustments or settlement fee deductions) were returned as `HUMAN_REVIEW` by the LLM because the LLM failed to link the prefetched adjustment record to the discrepancy.
+
+### Root Cause Analysis
+In the original batch pipeline, if the LLM output `HUMAN_REVIEW`, the controller accepted it blindly without re-checking whether objective financial proof existed in the underlying database.
+
+### The Production Fix
+Added a mandatory **post-LLM deterministic evidence validation step** in `batch_controller.py`:
+1. After the LLM returns its proposal, Python calls `has_sufficient_resolution_evidence()`.
+2. If documented adjustment records mathematically account for the discrepancy without contradiction, `build_proven_adjustment_resolution()` overrides the LLM's hesitation and outputs an authoritative `AUTO_RESOLVED` decision with full calculation proof.
+
+### Impact on Test Dataset 03
+- **Before Fix**: 19/20 correct (95.00% accuracy, 83.33% recall — 1 valid adjustment case missed).
+- **After Fix**: **20/20 correct (100.00% accuracy, 100.00% recall, 100.00% precision)**.
+
+---
+
+## Data Integrity & Decimal Precision Safeguards
+
+Financial systems cannot tolerate floating-point rounding errors (e.g., `0.1 + 0.2 = 0.30000000000000004`).
+
+1. **Exact Decimal Parsing**: All monetary fields are parsed using Python's `Decimal` via `safe_decimal`. Floating-point conversion and integer truncation (`int(float(...))`) are strictly prohibited.
+2. **Raw vs. Parsed Upload Invariants**: During CSV upload (`_parse_uploaded_csv`), raw strings are validated against normalized `Decimal` representations to prevent silent truncation.
+3. **Provenance Tracking**: Every parsed record retains its source file name (`_source_file`) and row number (`_source_row`).
+4. **Currency Formatting**: UI and audit logs format monetary values cleanly (e.g., `9357.5` $\rightarrow$ `₹9,357.50`).
+
+---
+
+## Canonical Data Normalizer (`src/normalizer/`)
+
+The system includes a dedicated data normalizer to transform arbitrary third-party export files into canonical financial schemas:
+
+- **Canonical Schemas**: Standard contracts for Payments, Ledgers, Bank Statements, and Adjustments.
+- **Supported Formats**: Generic CSV files and public synthetic benchmarks (such as **IBM AMLSim synthetic transaction data**).
+- **Features**: Schema auto-detection, manifest generation, normalization preview, and validation.
+
+> [!IMPORTANT]
+> **Data Labeling Notice**: Public datasets (such as IBM AMLSim) are **public synthetic financial benchmarks**, not private customer bank records.
+
+---
+
+## Intended User Experience & One-Click Workflow
+
+The frontend dashboard is designed around **one primary user action**:
+
+```text
+Upload Source CSV Files (Optional)  ──►  Click "RUN RECONCILIATION"
+                                                 │
+                                                 ▼
+               Automated Ingestion ──► Phase 1 Engine ──► AI Parallel Batches ──► Final Dashboard
+```
+
+Developer options (provider selection, model selection, custom batch sizes) are housed in a dedicated **Settings** panel to keep the primary operational workflow clean.
+
+---
+
+## Frontend Phase Lifecycle & Real-Time SSE Updates
+
+To prevent background work from being mislabeled as Phase 1, the React application enforces distinct lifecycle states:
+
+```text
+[UPLOADING] ──► [VALIDATING] ──► [STARTING_RECONCILIATION] ──► [RUNNING_PHASE_1] ──► [RUNNING_AI] ──► [COMPLETED]
+```
+
+### Real-Time SSE Event Stream
+
+Execution progress is streamed live over Server-Sent Events (SSE) via `/api/evaluations/{group_id}/stream`:
+
+1. `run_started`: Emitted when the run starts.
+2. `phase1_started`: Emitted when Phase 1 deterministic reconciliation begins.
+3. `phase1_completed`: Emitted immediately upon Phase 1 completion (triggers UI transition to Phase 2).
+4. `batch_started`: Emitted when a batch starts execution.
+5. `case_completed`: Emitted as individual cases finish.
+6. `batch_completed`: Emitted as each batch finishes (results rendered incrementally on screen).
+7. `metrics_updated`: Live precision, recall, and accuracy updates.
+8. `run_completed`: Final completion signal.
+
+---
+
+## Persistence, Auditability, and Failure Handling
+
+- **Per-Batch Persistence**: As each batch finishes, decisions and metrics are persisted to SQLite. If a browser disconnects, progress is preserved.
+- **Resume Support**: Interrupted runs can be resumed (`resume_group_id`) without re-investigating completed batches.
+- **Provider API Error Isolation**: If an LLM provider returns an API error (e.g. rate-limit or quota error), the affected batch fast-fails safely to `NOT_EVALUATED` without stalling other batches or crashing the application.
+- **Ground-Truth Policy**: Ground-truth labels are **NEVER** passed to the LLM. Ground truth is used exclusively after investigation to compute evaluation metrics. When no ground truth exists, benchmark cards are safely omitted.
+- **Observability**: Developer trace mode (`--trace` or `SHOW_AGENT_TRACE=true`) logs operational milestones (`[ORCHESTRATOR]`, `[FINANCE ENGINE | PYTHON]`) without exposing raw prompt CoT or API secrets.
+
+---
+
+## Repository Project Structure
+
+```text
+AI Finance Controller/
+├── data/                       # Synthetic benchmark datasets & evaluation outputs
+├── frontend/                   # React 18 + Vite + Tailwind dashboard
+│   ├── src/components/         # Header, DataSources, EvaluationPanel, Tables
 │   └── package.json
 ├── src/
-│   ├── agent/
-│   │   ├── batch_controller.py     # Batch Investigation Controller & Prefetch
-│   │   ├── controller.py           # Individual Agent Controller & Router
-│   │   ├── evaluator.py            # Accuracy, precision, recall computation
-│   │   ├── openrouter_client.py    # OpenRouter API client
-│   │   ├── gemini_client.py        # Gemini API client
-│   │   ├── prompts.py              # System & batch prompts
-│   │   ├── schemas.py              # Pydantic data contracts
-│   │   └── tools.py                # Deterministic financial toolkit
-│   ├── api/                        # FastAPI REST routes
-│   ├── db/                         # SQLAlchemy models & repository
-│   ├── config.py                   # Environment configuration
-│   ├── demo.py                     # Standalone offline demo script
-│   ├── generator.py                # Synthetic financial data generator
-│   ├── reconciliation.py           # Phase 1 deterministic rule engine
-│   ├── run_llm_eval.py             # CLI evaluation runner (Individual / Batch / Compare)
-│   └── debug_case.py               # Single-case targeted debugger
-├── tests/                          # 91 automated unit and integration tests
-├── .env.example                    # Environment variable template
+│   ├── agent/                  # Agent controllers, prompts, schemas, tools
+│   │   ├── multi_agent/        # Orchestrator, Investigator, Verifier
+│   │   ├── batch_controller.py # Batch Agent Controller & prefetching
+│   │   ├── controller.py       # Individual Agent Controller
+│   │   ├── evaluator.py        # Metrics computation & partitioning
+│   │   ├── schemas.py          # Pydantic data contracts
+│   │   └── tools.py            # Deterministic financial tools
+│   ├── api/                    # FastAPI routes (runs, evaluations, health)
+│   ├── db/                     # SQLAlchemy models, database, repository
+│   ├── normalizer/             # Canonical schema normalizer & IBM AMLSim converter
+│   ├── generator.py            # Synthetic financial data generator
+│   ├── reconciliation.py       # Phase 1 deterministic reconciliation engine
+│   ├── run_dataset.py          # CLI runner for dataset reconciliation
+│   └── run_llm_eval.py         # Evaluation stream runner
+├── tests/                      # 222 automated unit and integration tests
+├── .env.example                # Environment variable configuration template
+├── requirements.txt            # Python dependencies
 └── README.md
 ```
 
 ---
 
-## Setup
+## Installation & Getting Started
 
-### Prerequisites
+### 1. Prerequisites
 - Python 3.11+
-- Node.js 18+ (for frontend dashboard)
+- Node.js 18+
 
-### 1. Clone & Install Backend
+### 2. Clone & Install Dependencies
 ```bash
 git clone https://github.com/cezzanrangrej/AI-Finance-Controller.git
 cd "AI Finance Controller"
 
-# Create and activate virtual environment
+# Create Python virtual environment
 python -m venv venv
-# On Windows:
+# Windows:
 .\venv\Scripts\activate
-# On Linux/macOS:
+# Linux/macOS:
 source venv/bin/activate
 
-# Install dependencies
+# Install Python requirements
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 3. Environment Setup
 ```bash
 cp .env.example .env
 ```
-Edit `.env`:
+Edit `.env` to configure providers (or leave as `demo` for key-less operation):
 ```ini
-LLM_PROVIDER=demo                   # demo, openrouter, or gemini
-OPENROUTER_API_KEY=your_key_here    # required for OpenRouter
-OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
-GEMINI_API_KEY=your_key_here        # required for Gemini
-GEMINI_MODEL=gemini-2.5-flash
+LLM_PROVIDER=demo
 ```
 
-### 3. Install & Build Frontend
+### 4. Build Frontend
 ```bash
 cd frontend
 npm install
@@ -356,83 +431,77 @@ cd ..
 
 ---
 
-## Run Demo Mode (Offline / Key-Less)
+## CLI Usage Examples
 
-Run the full deterministic batch reconciliation and AI agent investigation without any API keys:
+### 1. Deterministic Phase 1 Dataset Run
+Reconcile an explicit dataset using only the deterministic Phase 1 engine:
 ```bash
-python src/demo.py
+python src/run_dataset.py --data-dir "data" --mode phase1
 ```
 
-Launch the FastAPI backend:
+### 2. Full Automatic Exception Investigation (Batch Mode)
+Reconcile a dataset and investigate all detected exceptions in parallel batches:
 ```bash
-uvicorn src.api.main:app --reload --port 8000
+python src/run_dataset.py --data-dir "data" --mode batch --batch-size 5
 ```
-API Documentation is available at `http://localhost:8000/docs`.
 
-Launch the React dashboard:
+### 3. Controlled Exception Subset Investigation
+Investigate only a controlled subset of exceptions (e.g., 5 cases):
+```bash
+python src/run_dataset.py --data-dir "data" --mode batch --cases 5 --batch-size 5
+```
+
+### 4. Multi-Agent Investigation Mode with Live Developer Trace
+Run multi-agent investigator/verifier investigation with live terminal trace output:
+```bash
+python src/run_dataset.py --data-dir "data" --mode multi-agent --cases 2 --trace
+```
+
+---
+
+## Running the Web Application
+
+### Launch FastAPI Backend
+```bash
+python -m uvicorn src.api.main:app --port 8000 --reload
+```
+API OpenAPI documentation is available at `http://localhost:8000/docs`.
+
+### Launch React Frontend (Dev Server)
 ```bash
 cd frontend
 npm run dev
 ```
-Dashboard is available at `http://localhost:5173`.
+Dashboard is accessible at `http://localhost:5173`.
 
 ---
 
-## Run Real LLM Mode
+## Automated Test Suite
 
-### 1. Batch Evaluation (Recommended)
-```bash
-python src/run_llm_eval.py \
-  --provider openrouter \
-  --cases 5 \
-  --batch-size 5 \
-  --model meta-llama/llama-3.3-70b-instruct
-```
-
-### 2. Multi-Run Aggregate Evaluation
-```bash
-python src/run_llm_eval.py \
-  --provider openrouter \
-  --cases 5 \
-  --runs 3 \
-  --batch-size 5 \
-  --model meta-llama/llama-3.3-70b-instruct
-```
-
-### 3. Controlled Comparison Mode (Individual vs. Batch)
-```bash
-python src/run_llm_eval.py \
-  --provider openrouter \
-  --cases 5 \
-  --mode compare \
-  --batch-size 5 \
-  --model meta-llama/llama-3.3-70b-instruct
-```
-
----
-
-## Run Automated Tests
-
-Run the complete 91-test suite:
+Run the full Python test suite (222 unit and integration tests):
 ```bash
 python -m pytest -v
 ```
 
+*Verified Test Results*: **222 passed, 2 skipped** (100% pass rate).
+
 ---
 
-## Limitations
+## Known Limitations
 
-- **Synthetic Data**: Evaluated on deterministic synthetic datasets modeling gateway, ledger, and banking distributions.
-- **Controlled Subset Scope**: Real LLM benchmarks evaluate controlled subsets (5–15 cases) rather than entire enterprise datasets in a single prompt.
-- **No Direct Banking APIs**: Operates on simulated statement records rather than direct open banking OAuth APIs.
-- **Read-Only Actions**: Discrepancies are marked for resolution or escalation; ledger adjustments are not posted directly to third-party ERPs without human approval.
+- **Public Synthetic Data**: Default test datasets are synthetic benchmarks generated for evaluation, not live production banking feeds.
+- **Provider Latency Variability**: Wall-clock performance during Phase 2 AI investigation depends on external LLM provider API latency and rate limits.
+- **Multi-Agent Overhead**: Multi-agent investigator/verifier mode incurs higher token consumption and latency than single-agent or batch modes.
+- **Balanced Partitioning Heuristic**: Balanced exception-type partitioning is a deterministic scheduling heuristic, not a guaranteed mathematical proof of minimum batch time.
+- **Read-Only Scope**: Discrepancies are flagged and proven for resolution or escalation; ledger adjustments are not posted directly to third-party ERPs without human approval.
 - **Prototype Status**: Production deployment requires enterprise role-based access control (RBAC), KMS secret management, and distributed rate limiting.
 
 ---
 
-## Future Scaling
+## Future Roadmap
 
-Planned roadmap for production scaling:
-1. **Throughput Scaling**: Benchmark deterministic Phase 1 throughput from 100 to 1,000 and 10,000 records.
-2. **Exception-Driven AI Budget**: Since Phase 1 handles 70% of records in microseconds, AI costs scale only with the exception rate.
-3. **Async Distributed Batches**: Celery / Redis queue worker integration for asynchronous multi-batch processing.
+- **High-Throughput Scale Testing**: Benchmark Phase 1 and parallel batch execution across 10,000+ transaction batches.
+- **Latency-Aware Scheduling**: Dynamic batch scheduling based on historical per-exception-type execution latencies.
+- **Additional Data Converters**: Expand `src/normalizer/` with additional ERP export formats (SAP, NetSuite, QuickBooks).
+- **Advanced Operational Analytics**: Extended analytics for tracking merchant adjustment recovery rates over time.
+

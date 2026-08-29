@@ -101,6 +101,8 @@ class EvaluationRunRequest(BaseModel):
     provider: Optional[str] = "demo"
     cases_per_run: Optional[int] = 5
     runs: Optional[int] = 1
+    batch_size: Optional[int] = 5
+    parallel_batches: Optional[int] = None
     model: Optional[str] = None
 
 
@@ -145,6 +147,9 @@ class EvaluationGroupSummaryResponse(BaseModel):
 
 
 
+from typing import Any, Dict, List, Optional, Union
+
+
 class ExceptionItemResponse(BaseModel):
     """Exception item response model."""
     transaction_id: str
@@ -152,16 +157,26 @@ class ExceptionItemResponse(BaseModel):
     status: str
     decision: str
     resolution_type: Optional[str] = "NONE"
-    payment_amount: Optional[int] = None
-    gross_amount: Optional[int] = None
-    fee: Optional[int] = None
-    expected_amount: Optional[int] = None
-    actual_amount: Optional[int] = None
-    difference: Optional[int] = None
+    payment_amount: Optional[Union[float, int]] = None
+    gross_amount: Optional[Union[float, int]] = None
+    fee: Optional[Union[float, int]] = None
+    expected_amount: Optional[Union[float, int]] = None
+    actual_amount: Optional[Union[float, int]] = None
+    difference: Optional[Union[float, int]] = None
     reason: str
     recommended_action: str
     confidence: float
     evidence: List[str]
+
+
+class SourceProvenance(BaseModel):
+    """Provenance tracking for a transaction source record."""
+    source_file: Optional[str] = None
+    source_row: Optional[int] = None
+    raw_credited_amount: Optional[str] = None
+    parsed_credited_amount: Optional[Union[float, int, str]] = None
+    raw_amount: Optional[str] = None
+    parsed_amount: Optional[Union[float, int, str]] = None
 
 
 class TransactionDetailResponse(BaseModel):
@@ -169,14 +184,15 @@ class TransactionDetailResponse(BaseModel):
     transaction_id: str
     status: str
     exception_type: Optional[str] = None
-    payment_amount: Optional[int] = None
-    gross_amount: Optional[int] = None
-    fee: Optional[int] = None
-    expected_net_amount: Optional[int] = None
-    bank_amount: Optional[int] = None
-    difference: Optional[int] = None
+    payment_amount: Optional[Union[float, int]] = None
+    gross_amount: Optional[Union[float, int]] = None
+    fee: Optional[Union[float, int]] = None
+    expected_net_amount: Optional[Union[float, int]] = None
+    bank_amount: Optional[Union[float, int]] = None
+    difference: Optional[Union[float, int]] = None
     adjustments: Optional[List[Dict[str, Any]]] = None
     agent_investigation: Optional[Dict[str, Any]] = None
+    source_provenance: Optional[Dict[str, Any]] = None
 
 
 class AuditItemResponse(BaseModel):
@@ -189,3 +205,28 @@ class AuditItemResponse(BaseModel):
     decision: Optional[str] = None
     reason: Optional[str] = None
     confidence: Optional[float] = None
+
+
+class DataIntegrityRecord(BaseModel):
+    """Per-transaction data integrity verification record."""
+    transaction_id: str
+    source_file: Optional[str] = None
+    source_row: Optional[int] = None
+    raw_bank_amount: Optional[str] = None
+    parsed_bank_amount: Optional[Union[float, int]] = None
+    normalized_bank_amount: Optional[Union[float, int]] = None
+    reconciliation_bank_amount: Optional[Union[float, int]] = None
+    api_bank_amount: Optional[Union[float, int]] = None
+    integrity_passed: bool
+    details: Optional[str] = None
+
+
+class DataIntegrityDiagnosticResponse(BaseModel):
+    """Development-only data integrity verification report."""
+    run_id: str
+    environment: str
+    total_records: int
+    all_passed: bool
+    discrepancy_count: int
+    records: List[DataIntegrityRecord]
+

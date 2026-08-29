@@ -1,71 +1,113 @@
 import React from 'react';
-import { ShieldCheck, Play, RefreshCw, Layers, Cpu } from 'lucide-react';
+import { Play, RefreshCw, PanelLeft, PanelLeftClose, CheckCircle2, Loader2, AlertCircle, Database } from 'lucide-react';
 
-export default function Header({ onRun, isRunning, activeRunId, runs, onSelectRun }) {
+export default function Header({
+  onRunReconciliation,
+  workflowState,
+  datasetSource,
+  isSidebarOpen,
+  onToggleSidebar,
+}) {
+  const isRunning = workflowState === 'RUNNING_PHASE_1' || workflowState === 'RUNNING_AI' || workflowState === 'VALIDATING';
+
+  const getStatusBadge = () => {
+    switch (workflowState) {
+      case 'RUNNING_PHASE_1':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+            <Loader2 className="h-3 w-3 animate-spin text-amber-600" />
+            Phase 1 Processing
+          </span>
+        );
+      case 'RUNNING_AI':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <Loader2 className="h-3 w-3 animate-spin text-emerald-600" />
+            AI Investigating
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+            Reconciliation Complete
+          </span>
+        );
+      case 'FAILED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+            <AlertCircle className="h-3 w-3 text-rose-600" />
+            Reconciliation Failed
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            Ready for Reconciliation
+          </span>
+        );
+    }
+  };
+
   return (
-    <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-30 px-6 py-4">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
-        
-        {/* Title and Badge */}
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <ShieldCheck className="h-6 w-6 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-white tracking-tight">AI FINANCE CONTROLLER</h1>
-              <span className="px-2 py-0.5 text-xs font-mono font-medium rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                Gemini Multi-Agent
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 font-medium">Multi-Source Financial Reconciliation & AI Exception Investigation</p>
-          </div>
-        </div>
+    <header className="h-16 border-b border-slate-200 bg-white sticky top-0 z-30 px-4 sm:px-6 flex items-center justify-between">
+      {/* Left: Sidebar Toggle & Page context */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onToggleSidebar}
+          title={isSidebarOpen ? 'Close Sidebar' : 'Open Sidebar'}
+          className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+        >
+          {isSidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
+        </button>
 
-        {/* Actions & Run Selector */}
-        <div className="flex items-center gap-3">
-          {/* Run selector dropdown */}
-          {runs && runs.length > 0 && (
-            <div className="flex items-center gap-2 bg-slate-800/80 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs">
-              <Layers className="h-3.5 w-3.5 text-slate-400" />
-              <select
-                value={activeRunId || ''}
-                onChange={(e) => onSelectRun(e.target.value)}
-                className="bg-transparent text-slate-200 font-mono font-medium outline-none cursor-pointer"
-              >
-                {runs.map((r) => (
-                  <option key={r.run_id} value={r.run_id} className="bg-slate-900 text-slate-200">
-                    {r.run_id} ({new Date(r.created_at).toLocaleTimeString()})
-                  </option>
-                ))}
-              </select>
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-sm font-bold tracking-tight text-slate-900 uppercase">
+              AI Finance Controller
+            </h1>
+            
+            {/* Status Badge */}
+            <div className="hidden sm:block">
+              {getStatusBadge()}
             </div>
+
+            {/* Dataset Badge */}
+            <div className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono text-slate-600 bg-slate-50 border border-slate-200">
+              <Database className="h-3 w-3 text-slate-400" />
+              <span>{datasetSource || 'Standard Dataset'}</span>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500 font-normal hidden sm:block">
+            Autonomous multi-source financial reconciliation & exception investigation
+          </p>
+        </div>
+      </div>
+
+      {/* Right: Single Primary Action */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onRunReconciliation}
+          disabled={isRunning}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all shadow-xs cursor-pointer ${
+            isRunning
+              ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+              : 'bg-emerald-600 hover:bg-emerald-700 text-white active:translate-y-px'
+          }`}
+        >
+          {isRunning ? (
+            <>
+              <RefreshCw className="h-3.5 w-3.5 animate-spin text-white" />
+              <span>Running...</span>
+            </>
+          ) : (
+            <>
+              <Play className="h-3.5 w-3.5 fill-current" />
+              <span>Run Reconciliation</span>
+            </>
           )}
-
-          {/* Trigger Run Button */}
-          <button
-            onClick={onRun}
-            disabled={isRunning}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all shadow-md ${
-              isRunning
-                ? 'bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/25 active:scale-95'
-            }`}
-          >
-            {isRunning ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
-                <span>RUNNING RECONCILIATION...</span>
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4 fill-current" />
-                <span>RUN RECONCILIATION</span>
-              </>
-            )}
-          </button>
-        </div>
-
+        </button>
       </div>
     </header>
   );

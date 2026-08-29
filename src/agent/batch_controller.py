@@ -13,7 +13,13 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.agent.controller import AgentController, LLMClient
+from src.agent.controller import (
+    AgentController,
+    EvidenceState,
+    LLMClient,
+    build_proven_adjustment_resolution,
+    has_sufficient_resolution_evidence,
+)
 from src.agent.prompts import BATCH_SYSTEM_PROMPT, build_batch_investigation_prompt
 from src.agent.schemas import (
     AgentDecision,
@@ -83,10 +89,18 @@ class BatchAgentController:
     and resilient individual agent fallback.
     """
 
-    def __init__(self, toolkit: FinancialToolkit, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        toolkit: FinancialToolkit,
+        llm_client: LLMClient,
+        tracer: Optional[Any] = None,
+    ) -> None:
         self.toolkit = toolkit
         self.llm = llm_client
-        self.fallback_agent = AgentController(toolkit=toolkit, llm_client=llm_client)
+        from src.agent.trace import AgentTracer, default_tracer
+        self.tracer = tracer or default_tracer
+        self.fallback_agent = AgentController(toolkit=toolkit, llm_client=llm_client, tracer=self.tracer)
+
 
     def investigate_batch(
         self,
@@ -121,9 +135,13 @@ class BatchAgentController:
         batch_decisions_map: Dict[str, AgentDecision] = {}
         fallback_txns: List[str] = []
 
-        tokens_before = getattr(self.llm, "cumulative_total_tokens", 0)
-        prompt_toks_before = getattr(self.llm, "cumulative_prompt_tokens", 0)
-        comp_toks_before = getattr(self.llm, "cumulative_completion_tokens", 0)
+        tb_tot = getattr(self.llm, "cumulative_total_tokens", 0)
+        tb_p = getattr(self.llm, "cumulative_prompt_tokens", 0)
+        tb_c = getattr(self.llm, "cumulative_completion_tokens", 0)
+
+        tokens_before = tb_tot if isinstance(tb_tot, (int, float)) else 0
+        prompt_toks_before = tb_p if isinstance(tb_p, (int, float)) else 0
+        comp_toks_before = tb_c if isinstance(tb_c, (int, float)) else 0
 
         try:
             response = self.llm.chat(messages=messages)
@@ -179,13 +197,43 @@ class BatchAgentController:
                         recommended_action="Manual review required.",
                     )
 
+        # Step 3: Deterministic Proof Enforcement (Python/Decimal is Authoritative)
+        for case in prefetched_cases:
+            tid = case.transaction_id
+            exc_rec = cases_map.get(tid, {})
+            exc_type = exc_rec.get("reason", "UNKNOWN")
+
+            state = EvidenceState(tid)
+            state.payment = case.payment
+            state.ledger = case.ledger
+            state.bank_records = case.bank_records
+            state.adjustments = case.adjustments
+            state.duplicate_check = case.duplicate_check
+            state.expected_settlement = case.expected_settlement
+            state.adjusted_expected_settlement = case.adjusted_expected_settlement
+
+            is_proven, proof_data = has_sufficient_resolution_evidence(state, exc_type)
+            if is_proven and proof_data:
+                current_dec = batch_decisions_map.get(tid)
+                evidence_list = current_dec.evidence if current_dec and current_dec.evidence else [f"Phase 1 exception: {exc_type}"]
+                batch_decisions_map[tid] = build_proven_adjustment_resolution(
+                    txn_id=tid,
+                    exception_type=exc_type,
+                    evidence=evidence_list,
+                    resolution_data=proof_data,
+                )
+
         perf_end = time.perf_counter()
         t_end = datetime.now(timezone.utc)
         processing_time = max(perf_end - perf_start, 0.0001)
 
-        tokens_after = getattr(self.llm, "cumulative_total_tokens", 0)
-        prompt_toks_after = getattr(self.llm, "cumulative_prompt_tokens", 0)
-        comp_toks_after = getattr(self.llm, "cumulative_completion_tokens", 0)
+        tok_total = getattr(self.llm, "cumulative_total_tokens", 0)
+        tok_prompt = getattr(self.llm, "cumulative_prompt_tokens", 0)
+        tok_comp = getattr(self.llm, "cumulative_completion_tokens", 0)
+
+        tokens_after = tok_total if isinstance(tok_total, (int, float)) else 0
+        prompt_toks_after = tok_prompt if isinstance(tok_prompt, (int, float)) else 0
+        comp_toks_after = tok_comp if isinstance(tok_comp, (int, float)) else 0
 
         delta_total = max(tokens_after - tokens_before, 0)
         if delta_total == 0 and tokens_after > 0:
@@ -204,6 +252,11 @@ class BatchAgentController:
         provider_name = getattr(self.llm, "provider", "demo")
         model_name = getattr(self.llm, "model", "demo")
 
+        type_counts: Dict[str, int] = {}
+        for c in batch_exceptions:
+            etype = c.get("reason") or c.get("exception_type") or c.get("initial_exception") or "UNKNOWN"
+            type_counts[etype] = type_counts.get(etype, 0) + 1
+
         log = BatchInvestigationLog(
             batch_id=batch_id,
             batch_size=len(batch_exceptions),
@@ -220,6 +273,9 @@ class BatchAgentController:
             fallback_count=len(fallback_txns),
             fallback_transaction_ids=fallback_txns,
             decisions=ordered_decisions,
+            partition_strategy="balanced_exception_type",
+            case_count=len(batch_exceptions),
+            exception_type_counts=type_counts,
         )
 
         return ordered_decisions, log
@@ -239,11 +295,13 @@ class BatchAgentController:
         if not exceptions:
             return [], []
 
+        from src.agent.batch_partitioner import partition_exceptions_balanced
+
         all_decisions: List[AgentDecision] = []
         batch_logs: List[BatchInvestigationLog] = []
 
-        for i in range(0, len(exceptions), batch_size):
-            chunk = exceptions[i : i + batch_size]
+        chunks = partition_exceptions_balanced(exceptions, batch_size=batch_size)
+        for chunk in chunks:
             decisions, log = self.investigate_batch(chunk)
             all_decisions.extend(decisions)
             batch_logs.append(log)

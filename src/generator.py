@@ -14,9 +14,17 @@ from typing import Any, Dict, List, Optional, Tuple
 class SyntheticDataGenerator:
     """Generates synthetic multi-source financial records for reconciliation and AI investigation."""
 
-    def __init__(self, seed: int = 42, total_transactions: int = 100):
+    def __init__(
+        self,
+        seed: int = 42,
+        total_transactions: int = 100,
+        scenario_distribution: Optional[Dict[str, int]] = None,
+        explainable_counts: Optional[Dict[str, int]] = None,
+    ):
         self.seed = seed
         self.total_transactions = total_transactions
+        self.scenario_distribution = scenario_distribution
+        self.explainable_counts = explainable_counts
         random.seed(self.seed)
 
     def generate(self) -> Tuple[
@@ -34,16 +42,26 @@ class SyntheticDataGenerator:
         """
         random.seed(self.seed)
 
-        # Target Phase 1 error distribution counts (Total = 100)
-        scenarios = (
-            ["RECONCILED"] * 70
-            + ["GROSS_AMOUNT_MISMATCH"] * 10
-            + ["MISSING_LEDGER_RECORD"] * 5
-            + ["MISSING_BANK_RECORD"] * 5
-            + ["BANK_AMOUNT_MISMATCH"] * 4
-            + ["DUPLICATE_BANK_RECORD"] * 3
-            + ["LEDGER_CALCULATION_ERROR"] * 3
-        )
+        # Target Phase 1 error distribution counts
+        if self.scenario_distribution is not None:
+            total_scenarios = sum(self.scenario_distribution.values())
+            if total_scenarios != self.total_transactions:
+                raise ValueError(
+                    f"Sum of scenario counts ({total_scenarios}) does not match total_transactions ({self.total_transactions})"
+                )
+            scenarios = []
+            for sc_name, count in self.scenario_distribution.items():
+                scenarios.extend([sc_name] * count)
+        else:
+            scenarios = (
+                ["RECONCILED"] * 70
+                + ["GROSS_AMOUNT_MISMATCH"] * 10
+                + ["MISSING_LEDGER_RECORD"] * 5
+                + ["MISSING_BANK_RECORD"] * 5
+                + ["BANK_AMOUNT_MISMATCH"] * 4
+                + ["DUPLICATE_BANK_RECORD"] * 3
+                + ["LEDGER_CALCULATION_ERROR"] * 3
+            )
 
         random.shuffle(scenarios)
 
@@ -56,7 +74,18 @@ class SyntheticDataGenerator:
         bank_ref_counter = 1
         adj_ref_counter = 1
 
-        # We will make 8 specific exception cases explainable (e.g., 4 BANK_AMOUNT_MISMATCH and 4 GROSS_AMOUNT_MISMATCH)
+        # Specific exception cases explainable with adjustments
+        max_bank_explainable = (
+            self.explainable_counts.get("BANK_AMOUNT_MISMATCH", 4)
+            if self.explainable_counts is not None
+            else 4
+        )
+        max_gross_explainable = (
+            self.explainable_counts.get("GROSS_AMOUNT_MISMATCH", 4)
+            if self.explainable_counts is not None
+            else 4
+        )
+
         explainable_indices = set()
         gross_mismatch_count = 0
         bank_mismatch_count = 0
@@ -64,11 +93,11 @@ class SyntheticDataGenerator:
         for idx, sc in enumerate(scenarios):
             if sc == "BANK_AMOUNT_MISMATCH":
                 bank_mismatch_count += 1
-                if bank_mismatch_count <= 4:  # All 4 bank amount mismatches will have explanatory adjustments
+                if bank_mismatch_count <= max_bank_explainable:
                     explainable_indices.add(idx)
             elif sc == "GROSS_AMOUNT_MISMATCH":
                 gross_mismatch_count += 1
-                if gross_mismatch_count <= 4:  # 4 out of 10 gross mismatches will have explanatory adjustments
+                if gross_mismatch_count <= max_gross_explainable:
                     explainable_indices.add(idx)
 
         for i, scenario in enumerate(scenarios, start=1):
@@ -286,3 +315,28 @@ class SyntheticDataGenerator:
             writer.writerows(adjustments)
 
         return payments_path, ledger_path, bank_path, adjustments_path
+
+    def save_ground_truth_csv(self, data_dir: str) -> str:
+        """Saves ground_truth.csv matching the generated transactions."""
+        os.makedirs(data_dir, exist_ok=True)
+        _, _, _, _, ground_truth = self.generate()
+        gt_path = os.path.join(data_dir, "ground_truth.csv")
+        with open(gt_path, "w", newline="", encoding="utf-8") as f:
+            fieldnames = [
+                "transaction_id",
+                "expected_phase1_status",
+                "expected_phase1_exception",
+                "expected_phase2_decision",
+                "expected_status",
+                "expected_exception",
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(ground_truth)
+        return gt_path
+
+    def save_all_to_csv(self, data_dir: str) -> Tuple[str, str, str, str, str]:
+        """Saves payments.csv, ledger.csv, bank.csv, adjustments.csv, and ground_truth.csv."""
+        payments_path, ledger_path, bank_path, adjustments_path = self.save_to_csv(data_dir)
+        gt_path = self.save_ground_truth_csv(data_dir)
+        return payments_path, ledger_path, bank_path, adjustments_path, gt_path

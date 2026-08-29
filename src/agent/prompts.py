@@ -6,6 +6,7 @@ exceptions when deterministic evidence (such as settlement adjustments) mathemat
 for the discrepancy.
 """
 
+import json
 from typing import Any, Dict
 
 
@@ -83,6 +84,9 @@ Do not include any text outside the JSON object.
 
 
 
+from src.utils.formatters import format_currency
+
+
 def build_investigation_prompt(exception_record: Dict[str, Any]) -> str:
     """Formats a Phase 1 exception record into the initial investigation message."""
     txn_id = exception_record.get("transaction_id", "UNKNOWN")
@@ -94,25 +98,17 @@ def build_investigation_prompt(exception_record: Dict[str, Any]) -> str:
     bank_amount = exception_record.get("bank_amount")
     difference = exception_record.get("difference")
 
-    def fmt(val: Any) -> str:
-        if val is None:
-            return "N/A"
-        try:
-            return f"₹{int(val):,}"
-        except (ValueError, TypeError):
-            return str(val)
-
     prompt = f"""A Phase 1 financial reconciliation exception has been flagged for investigation.
 
 ## Exception Summary
 - Transaction ID:      {txn_id}
 - Exception Type:      {exception_type}
-- Payment Amount:      {fmt(payment_amount)}
-- Ledger Gross:        {fmt(gross_amount)}
-- Ledger Fee:          {fmt(fee)}
-- Expected Settlement: {fmt(expected_net)}
-- Bank Credit:         {fmt(bank_amount)}
-- Discrepancy:         {fmt(difference)}
+- Payment Amount:      {format_currency(payment_amount)}
+- Ledger Gross:        {format_currency(gross_amount)}
+- Ledger Fee:          {format_currency(fee)}
+- Expected Settlement: {format_currency(expected_net)}
+- Bank Credit:         {format_currency(bank_amount)}
+- Discrepancy:         {format_currency(difference)}
 
 ## Investigation Steps
 1. Retrieve transaction records and check for adjustments using `get_transaction` and `get_adjustments`.
@@ -180,20 +176,20 @@ def build_batch_investigation_prompt(cases: list) -> str:
         exp_settle = cdict.get("expected_settlement", {})
         adj_settle = cdict.get("adjusted_expected_settlement", {})
 
-        p_amt = f"₹{payment.get('amount'):,}" if payment and payment.get("amount") is not None else "None"
-        l_gross = f"₹{ledger.get('gross_amount'):,}" if ledger and ledger.get("gross_amount") is not None else "None"
-        l_fee = f"₹{ledger.get('fee'):,}" if ledger and ledger.get("fee") is not None else "None"
-        l_net = f"₹{ledger.get('net_amount'):,}" if ledger and ledger.get("net_amount") is not None else "None"
+        p_amt = format_currency(payment.get("amount")) if payment and payment.get("amount") is not None else "None"
+        l_gross = format_currency(ledger.get("gross_amount")) if ledger and ledger.get("gross_amount") is not None else "None"
+        l_fee = format_currency(ledger.get("fee")) if ledger and ledger.get("fee") is not None else "None"
+        l_net = format_currency(ledger.get("net_amount")) if ledger and ledger.get("net_amount") is not None else "None"
 
-        b_lines = [f"{b.get('bank_reference')}: credited ₹{b.get('credited_amount', 0):,}" for b in banks]
+        b_lines = [f"{b.get('bank_reference')}: credited {format_currency(b.get('credited_amount', 0))}" for b in banks]
         b_summary = ", ".join(b_lines) if b_lines else "None"
 
-        a_lines = [f"{a.get('adjustment_type')}: ₹{a.get('amount', 0):,} ({a.get('reason', '')})" for a in adjs]
+        a_lines = [f"{a.get('adjustment_type')}: {format_currency(a.get('amount', 0))} ({a.get('reason', '')})" for a in adjs]
         a_summary = "; ".join(a_lines) if a_lines else "None"
 
         dup_str = f"Duplicate count = {dup.get('duplicate_count', 0)}, is_duplicate = {dup.get('is_duplicate', False)}" if dup else "None"
-        exp_str = f"Expected net = ₹{exp_settle.get('expected_net', 0):,} ({exp_settle.get('calculation', '')})" if exp_settle else "None"
-        adj_str = f"Adjusted net = ₹{adj_settle.get('adjusted_expected_net', 0):,} ({adj_settle.get('calculation', '')})" if adj_settle else "None"
+        exp_str = f"Expected net = {format_currency(exp_settle.get('expected_net', 0))} ({exp_settle.get('calculation', '')})" if exp_settle else "None"
+        adj_str = f"Adjusted net = {format_currency(adj_settle.get('adjusted_expected_net', 0))} ({adj_settle.get('calculation', '')})" if adj_settle else "None"
 
         case_block = f"""### Case {idx}: [{txn_id}] ({exc_type})
 - Payment: {p_amt}
@@ -218,4 +214,137 @@ def build_batch_investigation_prompt(cases: list) -> str:
 3. For unexplained discrepancies, missing records, or duplicates, choose HUMAN_REVIEW.
 4. Return a valid JSON object with the `decisions` list containing exactly {len(cases)} decisions matching the required schema.
 """
+
+
+# ==============================================================================
+# MULTI-AGENT INVESTIGATION PROMPTS
+# ==============================================================================
+
+INVESTIGATOR_SYSTEM_PROMPT = """You are the INVESTIGATOR AGENT in a controlled financial multi-agent reconciliation architecture.
+
+## Your Responsibilities
+1. Investigate the Phase 1 financial exception using available read-only financial tools.
+2. Formulate an investigation plan, query relevant financial records (payment, ledger, bank, adjustments), and check for settlement calculations.
+3. Stop investigating as soon as sufficient evidence is retrieved. Do NOT make unnecessary tool calls.
+4. You must NEVER perform authoritative mental math yourself. Always invoke deterministic tools (`calculate_expected_settlement`, `calculate_adjusted_expected_settlement`) when numeric verification is required.
+5. Never invent or hallucinate financial records, fees, or adjustments.
+6. Return a structured Investigation Proposal containing your collected evidence, proposed resolution, confidence, and any unresolved questions.
+
+## Output Format
+You MUST respond with a single valid JSON object matching this exact schema:
+{
+    "transaction_id": "<string>",
+    "exception_type": "<string>",
+    "evidence": ["<fact 1>", "<fact 2>", ...],
+    "proposed_resolution": "<AUTO_RESOLVED|HUMAN_REVIEW>",
+    "resolution_type": "<NONE|ADJUSTMENT_EXPLAINED|OTHER_EVIDENCE>",
+    "resolved_difference": <float or null>,
+    "confidence": <float between 0.0 and 1.0>,
+    "unresolved_questions": ["<question 1 if any>", ...],
+    "tool_history": ["<tool_name 1>", ...],
+    "reason": "<concise factual explanation>",
+    "recommended_action": "<concise action for finance operations>"
+}
+
+Do not include any internal chain-of-thought or text outside the JSON object.
+"""
+
+
+def build_investigator_prompt(exception_record: Dict[str, Any]) -> str:
+    """Formats an exception record for the Investigator Agent."""
+    txn_id = exception_record.get("transaction_id", "UNKNOWN")
+    exception_type = exception_record.get("reason", "UNKNOWN")
+    payment_amount = exception_record.get("payment_amount")
+    gross_amount = exception_record.get("gross_amount")
+    fee = exception_record.get("fee")
+    expected_net = exception_record.get("expected_net_amount")
+    bank_amount = exception_record.get("bank_amount")
+    difference = exception_record.get("difference")
+
+    return f"""Investigate the following Phase 1 reconciliation exception.
+
+## Exception Details
+- Transaction ID:      {txn_id}
+- Exception Type:      {exception_type}
+- Payment Amount:      {format_currency(payment_amount)}
+- Ledger Gross:        {format_currency(gross_amount)}
+- Ledger Fee:          {format_currency(fee)}
+- Expected Net Amount: {format_currency(expected_net)}
+- Bank Credited Amount:{format_currency(bank_amount)}
+- Discrepancy:         {format_currency(difference)}
+
+## Goal
+Retrieve necessary evidence with read-only tools, assess whether the discrepancy is mathematically explained by valid documented adjustments, and output your structured InvestigationProposal.
+"""
+
+
+VERIFIER_SYSTEM_PROMPT = """You are the VERIFIER AGENT in a controlled financial multi-agent reconciliation architecture.
+
+## Your Responsibilities
+1. Independently and conservatively verify whether the Investigator's proposed resolution is supported by the collected evidence and deterministic calculations.
+2. Check the evidence against strict financial criteria:
+   - Is the evidence sufficient to explain the full discrepancy?
+   - Does the proposed resolution agree with deterministic calculations?
+   - Is there any contradictory evidence (e.g. multiple bank credits, missing records, unexplained remainder)?
+   - Should this case be AUTO_RESOLVED or escalated to HUMAN_REVIEW?
+3. The Verifier must be CONSERVATIVE:
+   - If evidence is incomplete, ambiguous, or contradictory, decide HUMAN_REVIEW.
+   - Do NOT invent or assume evidence not present in the record.
+   - Do NOT perform mental arithmetic; rely on the provided deterministic calculation records.
+
+## Output Format
+You MUST respond with a single valid JSON object matching this exact schema:
+{
+    "transaction_id": "<string>",
+    "verified": <true|false>,
+    "decision": "<AUTO_RESOLVED|HUMAN_REVIEW>",
+    "reason": "<concise factual verification explanation>",
+    "evidence_references": ["<reference or calculation that supports your decision>", ...],
+    "contradictions": ["<contradiction or gap identified, if any>", ...],
+    "confidence": <float between 0.0 and 1.0>
+}
+
+Do not include any internal chain-of-thought or text outside the JSON object.
+"""
+
+
+def build_verifier_prompt(
+    exception_record: Dict[str, Any],
+    source_evidence: list,
+    deterministic_calculations: Dict[str, Any],
+    proposal: Dict[str, Any],
+) -> str:
+    """Formats the verification task for the Verifier Agent."""
+    txn_id = exception_record.get("transaction_id", "UNKNOWN")
+    exc_type = exception_record.get("reason", "UNKNOWN")
+
+    ev_lines = "\n".join(f"- {ev}" for ev in source_evidence) if source_evidence else "- None collected"
+    calcs_formatted = json.dumps(deterministic_calculations, indent=2, default=str)
+    proposal_formatted = json.dumps(proposal, indent=2, default=str)
+
+    return f"""Please independently verify the following exception investigation.
+
+## Original Exception
+- Transaction ID: {txn_id}
+- Exception Type: {exc_type}
+
+## Source Evidence Collected
+{ev_lines}
+
+## Deterministic Calculations
+```json
+{calcs_formatted}
+```
+
+## Investigator Proposal
+```json
+{proposal_formatted}
+```
+
+## Verification Instructions
+1. Assess whether the Investigator's proposed resolution is mathematically and objectively supported by the evidence and deterministic calculations.
+2. Flag any contradictions or unsupported assumptions.
+3. Emit a conservative VerificationResult JSON object.
+"""
+
 

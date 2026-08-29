@@ -1,0 +1,373 @@
+{
+  "evaluation_group_id": "group_test",
+  "status": "RUNNING",
+  "mode": "batch",
+  "provider": "demo",
+  "model": "demo",
+  "dataset_size": 0,
+  "phase1_exception_count": 25,
+  "runs": 1,
+  "cases_per_run": 25,
+  "batch_size": 5,
+  "current_run_number": 1,
+  "completed_batches": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "cases_completed_so_far": 25,
+  "partial_results": [
+    {
+      "transaction_id": "TXN_001",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_002",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_003",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_004",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_005",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_006",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_007",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_008",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_009",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_010",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_011",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766035Z"
+    },
+    {
+      "transaction_id": "TXN_012",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766553Z"
+    },
+    {
+      "transaction_id": "TXN_013",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766553Z"
+    },
+    {
+      "transaction_id": "TXN_014",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766553Z"
+    },
+    {
+      "transaction_id": "TXN_015",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.766553Z"
+    },
+    {
+      "transaction_id": "TXN_016",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_017",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_018",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_019",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_020",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_021",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_022",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_023",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_024",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    },
+    {
+      "transaction_id": "TXN_025",
+      "decision": "AUTO_RESOLVED",
+      "exception_type": "TEST",
+      "resolution_type": "NONE",
+      "resolved_difference": null,
+      "reason": "Validated",
+      "evidence": [
+        "Prefetched evidence validated."
+      ],
+      "confidence": 0.9,
+      "recommended_action": "Review",
+      "timestamp": "2026-08-29T22:16:09.767093Z"
+    }
+  ]
+}

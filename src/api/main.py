@@ -20,7 +20,7 @@ if _project_root not in sys.path:
 
 import src.config  # Loads .env variables
 
-from src.api.routes import audit, evaluations, exceptions, metrics, runs, transactions
+from src.api.routes import audit, evaluations, exceptions, metrics, normalizer, runs, transactions
 from src.db.database import init_db
 
 
@@ -55,13 +55,20 @@ app.include_router(exceptions.router)
 app.include_router(transactions.router)
 app.include_router(audit.router)
 app.include_router(evaluations.router)
+app.include_router(normalizer.router)
 
+# Direct dataset operation aliases
+app.add_api_route("/api/validate", runs.validate_csv_dataset, methods=["POST"])
+app.add_api_route("/api/validate/", runs.validate_csv_dataset, methods=["POST"])
+app.add_api_route("/api/upload", runs.create_run_from_upload, methods=["POST"], response_model=runs.RunSummaryResponse, status_code=201)
+app.add_api_route("/api/upload/", runs.create_run_from_upload, methods=["POST"], response_model=runs.RunSummaryResponse, status_code=201)
 
 
 @app.get("/api/health")
 def health_check():
     """Health check endpoint."""
     return {"status": "ok", "service": "AI Finance Controller API", "version": "3.0.0"}
+
 
 
 
