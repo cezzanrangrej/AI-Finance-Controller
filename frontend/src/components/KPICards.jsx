@@ -1,14 +1,23 @@
-﻿import React from 'react';
+import React from 'react';
 
 export default function KPICards({ metrics }) {
-  if (!metrics) return null;
+  if (!metrics) {
+    return (
+      <div className="bg-background border border-border rounded-lg p-6 text-center shadow-xs">
+        <p className="text-sm font-semibold text-text">No reconciliation metrics available</p>
+        <p className="text-xs text-text-secondary mt-1">
+          Upload your data sources and run a reconciliation to see KPI summary metrics.
+        </p>
+      </div>
+    );
+  }
 
-  const total = metrics.total_records || 100;
-  const initialMatch = metrics.initial_reconciled || 70;
-  const aiResolved = metrics.ai_auto_resolved ?? 8;
-  const humanReview = metrics.human_review ?? 22;
+  const total = metrics.total_records ?? 0;
+  const initialMatch = metrics.initial_reconciled ?? 0;
+  const aiResolved = metrics.ai_auto_resolved ?? 0;
+  const humanReview = metrics.human_review ?? 0;
 
-  const matchPct = total > 0 ? ((initialMatch / total) * 100).toFixed(1) : '70.0';
+  const matchPct = total > 0 ? ((initialMatch / total) * 100).toFixed(1) : '0.0';
 
   const cards = [
     {
@@ -16,28 +25,28 @@ export default function KPICards({ metrics }) {
       value: total.toLocaleString(),
       subtext: 'Batch transactions',
       tag: 'Batch',
-      tagColor: 'text-slate-600 bg-slate-100 border-slate-200',
+      tagColor: 'text-text-secondary bg-surface-alt border-border',
     },
     {
       title: 'INITIAL MATCH',
       value: initialMatch.toLocaleString(),
       subtext: `${matchPct}% of batch`,
       tag: 'Deterministic',
-      tagColor: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+      tagColor: 'text-text bg-accent-green/10 border-accent-green/30',
     },
     {
       title: 'AI RESOLVED',
       value: aiResolved.toLocaleString(),
       subtext: 'Evidence-backed',
       tag: 'Proof Verified',
-      tagColor: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+      tagColor: 'text-text bg-accent-green/10 border-accent-green/30',
     },
     {
       title: 'HUMAN REVIEW',
       value: humanReview.toLocaleString(),
       subtext: 'Requires attention',
       tag: 'Escalated',
-      tagColor: 'text-amber-700 bg-amber-50 border-amber-200',
+      tagColor: 'text-text bg-accent-coral/10 border-accent-coral/30',
     },
   ];
 
@@ -46,10 +55,10 @@ export default function KPICards({ metrics }) {
       {cards.map((card, idx) => (
         <div
           key={idx}
-          className="bg-white border border-slate-200 rounded-lg p-5 flex flex-col justify-between shadow-xs hover:border-slate-300 transition-colors"
+          className="bg-background border border-border rounded-lg p-5 flex flex-col justify-between shadow-xs hover:border-border transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
               {card.title}
             </span>
             <span className={`text-[10px] font-mono font-medium px-2 py-0.5 rounded border ${card.tagColor}`}>
@@ -58,10 +67,10 @@ export default function KPICards({ metrics }) {
           </div>
 
           <div className="mt-4">
-            <div className="text-3xl font-semibold font-mono tracking-tight text-slate-900">
+            <div className="text-3xl font-semibold font-mono tracking-tight text-text">
               {card.value}
             </div>
-            <p className="text-xs text-slate-500 mt-1 font-normal">{card.subtext}</p>
+            <p className="text-xs text-text-secondary mt-1 font-normal">{card.subtext}</p>
           </div>
         </div>
       ))}

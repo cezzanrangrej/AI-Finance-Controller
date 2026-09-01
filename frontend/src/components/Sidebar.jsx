@@ -41,7 +41,7 @@ export default function Sidebar({ activeTab, onSelectTab, isOpen, onToggleSideba
         {/* Brand Header + Close Button */}
         <div className="h-16 px-4 flex items-center justify-between border-b border-[#1F2937] bg-[#0E1522]">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 flex-shrink-0">
+            <div className="h-9 w-9 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center text-primary-light flex-shrink-0">
               <Shield className="h-5 w-5" strokeWidth={2.2} />
             </div>
             <div>
@@ -81,11 +81,11 @@ export default function Sidebar({ activeTab, onSelectTab, isOpen, onToggleSideba
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                   isActive
-                    ? 'bg-emerald-500/15 text-emerald-400 font-semibold border-l-3 border-emerald-400'
+                    ? 'bg-primary/15 text-primary-light font-semibold border-l-3 border-primary-light'
                     : 'text-slate-400 hover:text-white hover:bg-[#1F2937]'
                 }`}
               >
-                <Icon className={`h-4 w-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <Icon className={`h-4 w-4 ${isActive ? 'text-primary-light' : 'text-slate-400'}`} />
                 <span>{item.label}</span>
                 {item.key === 'datasources' && (
                   <span className="ml-auto text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
@@ -101,8 +101,8 @@ export default function Sidebar({ activeTab, onSelectTab, isOpen, onToggleSideba
         <div className="p-4 border-t border-[#1F2937] bg-[#0E1522] text-xs">
           <div className="flex items-center justify-between text-slate-400 mb-1.5">
             <span className="text-[11px] font-semibold text-slate-300">System Status</span>
-            <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="flex items-center gap-1.5 text-[11px] text-primary-light font-medium">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary-light animate-pulse" />
               Operational
             </div>
           </div>

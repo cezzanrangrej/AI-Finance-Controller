@@ -18,8 +18,8 @@ All benchmarks below are verified measurements on specific datasets and test wor
 | **Test Dataset 03 Execution Time** | **36.1363 sec** | 20 cases in 4 parallel 5-case batches |
 | **Test Dataset 02 Wall-Clock Speedup** | **84.8% Time Reduction** | 155.90s (Sequential) → 23.69s (Parallel 3x5 batches) |
 | **Controlled 5-Case Batch Optimization** | **81.5% Latency / 93.1% Token Reduction** | Latency: 59.64s → 11.01s; Tokens: 28,657 → 1,973 tokens |
-| **Automated Test Suite** | **222 passed, 2 skipped** | 100% pass rate across Python test suite |
-| **Frontend Production Build** | **0 Errors** | Verified production bundle via `npm run build` |
+| **Automated Test Suite** | **237 passed, 2 skipped** | 100% pass rate across 16 unit and integration test suites |
+| **Frontend Production Build** | **0 Errors** | Verified production bundle via Vite (`npm run build`) |
 
 ---
 
@@ -139,7 +139,7 @@ A dedicated request-lifecycle trace was performed to measure timing across every
 
 ## AI Exception Investigation Modes
 
-The system provides three complementary investigation strategies (all backed by the authoritative Python financial engine):
+The system provides four complementary investigation strategies (all backed by the authoritative Python financial engine):
 
 ### A. Individual Agent Mode
 - **Purpose**: Deep, interactive investigation of complex single exceptions.
@@ -156,6 +156,10 @@ The system provides three complementary investigation strategies (all backed by 
   2. **Deterministic Python Layer**: Validates mathematical equality and adjustment proof.
   3. **Verifier Agent**: Independently critiques the proposal against raw source records.
   4. **Final Controller**: Enforces conservative escalation to `HUMAN_REVIEW` if any disagreement or evidence gap exists.
+
+### D. Batch Multi-Agent Mode (`BatchMultiAgentController`)
+- **Purpose**: High-throughput parallel execution paired with independent dual-agent verification.
+- **Mechanism**: Groups exceptions into pre-fetched batches; the Investigator Agent proposes resolutions for the batch, the Python Decimal layer verifies proof sufficiency, and the Verifier Agent independently critiques the batch resolutions before final consensus.
 
 ---
 
@@ -212,6 +216,9 @@ To optimize wall-clock processing time, exception workloads are automatically di
 - **13 exceptions** (batch size 5) $\rightarrow$ 3 batches running concurrently.
 - **25 exceptions** (batch size 5) $\rightarrow$ 5 batches running concurrently.
 - **40 exceptions** (batch size 5) $\rightarrow$ 8 batches total (5 run concurrently, remaining wait for capacity).
+
+> [!NOTE]
+> **Multi-Run Cross-Validation Invariant**: When running multi-run benchmarks (`--runs N`), full dataset coverage is guaranteed across the union of all runs ($N$ non-overlapping, balanced partitions with 0 duplicate transaction IDs). At `runs=1` (the operational and frontend default), 100% of detected exceptions are investigated in that single run.
 
 ---
 
@@ -359,30 +366,79 @@ Execution progress is streamed live over Server-Sent Events (SSE) via `/api/eval
 
 ---
 
+## Executive Exception Reporting Engine (`src/reporting/`)
+
+The system includes a dedicated executive exception reporting generator (`src/reporting/exception_report.py`):
+
+- **Structured Metrics**: Summarizes total transactions, reconciled volume, exception breakdown, auto-resolution rate, and human escalation lists.
+- **Dual Export Formats**:
+  - **Markdown (`.md`)**: Formatted executive report with financial tables, adjustment audit trails, and root-cause summaries.
+  - **JSON (`.json`)**: Machine-readable data container for enterprise ERP ingestion and downstream compliance pipelines.
+- **Access Points**:
+  - **REST API**: `GET /api/runs/{run_id}/report?format=markdown|json&download=true`
+  - **CLI Script**: `python scripts/generate_report.py --run-id <RUN_ID> --format markdown --out report.md`
+
+---
+
+## Modernized Operations Dashboard (`frontend/`)
+
+The frontend application provides a reactive financial operations center built with React 18, Vite, and Tailwind CSS:
+
+- **Modular Views (`src/views/`)**:
+  - `DashboardView`: Primary one-click reconciliation workflow, real-time KPI metrics, and resolution breakdown.
+  - `ExceptionsView`: Filterable discrepancy browser with categorized tabs and detailed transaction inspect modals.
+  - `RunsView`: Historical run audit log with live status, duration tracking, and report downloads.
+  - `SettingsView`: LLM provider configuration, temperature tuning, and batch sizing.
+  - `AuditLogView`: Immutable event trail viewer for regulatory compliance.
+- **Reactive Hooks & API Layer (`src/hooks/`, `src/lib/`)**:
+  - `useActiveRun` & `useReconciliationRun`: Centralized SSE stream ingestion and state coordination.
+  - `lib/api.js`: Unified API client with automatic error handling.
+- **Run Progress Panel (`RunProgressPanel.jsx`)**: Real-time multi-stage visual progression showing Phase 1 deterministic matching through Phase 2 AI batch investigation.
+
+---
+
 ## Repository Project Structure
 
 ```text
 AI Finance Controller/
-├── data/                       # Synthetic benchmark datasets & evaluation outputs
+├── data/                       # Benchmark datasets & synthetic test fixtures
+│   └── fixtures/               # Test datasets 01, 02, and 03
+├── deploy/                     # Production deployment configurations
+│   ├── Dockerfile              # Multi-stage production container build
+│   └── docker-compose.yml      # Containerized backend & static UI deployment
+├── docs/                       # Architectural documentation
+│   └── architecture.md         # System architecture & design philosophy
 ├── frontend/                   # React 18 + Vite + Tailwind dashboard
-│   ├── src/components/         # Header, DataSources, EvaluationPanel, Tables
+│   ├── src/
+│   │   ├── components/         # Header, KPI cards, tables, modal, progress panel
+│   │   ├── hooks/              # useActiveRun, useReconciliationRun
+│   │   ├── lib/                # Centralized API client (api.js)
+│   │   └── views/              # Modularized views (Dashboard, Exceptions, Runs, etc.)
 │   └── package.json
+├── scripts/                    # Operational automation scripts
+│   ├── generate_report.py      # CLI exception report generator
+│   ├── run_dataset.py          # CLI batch dataset runner
+│   └── run_llm_eval.py         # Evaluation benchmark runner
 ├── src/
 │   ├── agent/                  # Agent controllers, prompts, schemas, tools
-│   │   ├── multi_agent/        # Orchestrator, Investigator, Verifier
+│   │   ├── multi_agent/        # MultiAgentOrchestrator & BatchMultiAgentController
 │   │   ├── batch_controller.py # Batch Agent Controller & prefetching
 │   │   ├── controller.py       # Individual Agent Controller
 │   │   ├── evaluator.py        # Metrics computation & partitioning
+│   │   ├── parallel_batch_engine.py # Async parallel batch scheduler
+│   │   ├── prompts.py          # Structured system & user prompts
 │   │   ├── schemas.py          # Pydantic data contracts
 │   │   └── tools.py            # Deterministic financial tools
 │   ├── api/                    # FastAPI routes (runs, evaluations, health)
-│   ├── db/                     # SQLAlchemy models, database, repository
+│   │   └── routes/             # Modular API route controllers
+│   ├── db/                     # SQLAlchemy models, database session, repository
 │   ├── normalizer/             # Canonical schema normalizer & IBM AMLSim converter
+│   ├── reporting/              # Executive Markdown & JSON report generator
 │   ├── generator.py            # Synthetic financial data generator
 │   ├── reconciliation.py       # Phase 1 deterministic reconciliation engine
-│   ├── run_dataset.py          # CLI runner for dataset reconciliation
+│   ├── run_dataset.py          # Core CLI dataset runner
 │   └── run_llm_eval.py         # Evaluation stream runner
-├── tests/                      # 222 automated unit and integration tests
+├── tests/                      # 237 automated unit and integration tests
 ├── .env.example                # Environment variable configuration template
 ├── requirements.txt            # Python dependencies
 └── README.md
@@ -394,7 +450,7 @@ AI Finance Controller/
 
 ### 1. Prerequisites
 - Python 3.11+
-- Node.js 18+
+- Node.js 18+ (or Docker)
 
 ### 2. Clone & Install Dependencies
 ```bash
@@ -431,35 +487,51 @@ cd ..
 
 ---
 
+## Docker & Container Deployment
+
+To launch the complete application stack (FastAPI backend + compiled React frontend) in a single Docker container:
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
+
+Access the application at `http://localhost:8000`.
+
+---
+
 ## CLI Usage Examples
 
 ### 1. Deterministic Phase 1 Dataset Run
 Reconcile an explicit dataset using only the deterministic Phase 1 engine:
 ```bash
-python src/run_dataset.py --data-dir "data" --mode phase1
+python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode phase1
 ```
 
 ### 2. Full Automatic Exception Investigation (Batch Mode)
 Reconcile a dataset and investigate all detected exceptions in parallel batches:
 ```bash
-python src/run_dataset.py --data-dir "data" --mode batch --batch-size 5
+python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode batch --batch-size 5
 ```
 
-### 3. Controlled Exception Subset Investigation
-Investigate only a controlled subset of exceptions (e.g., 5 cases):
+### 3. Batch Multi-Agent Investigation Mode
+Investigate exceptions using concurrent batches with dual-agent investigator and verifier consensus:
 ```bash
-python src/run_dataset.py --data-dir "data" --mode batch --cases 5 --batch-size 5
+python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode multi-agent --batch-size 5 --trace
 ```
 
-### 4. Multi-Agent Investigation Mode with Live Developer Trace
-Run multi-agent investigator/verifier investigation with live terminal trace output:
+### 4. Generate Executive Exception Report via CLI
+Generate an executive audit report in Markdown or JSON for any executed reconciliation run:
 ```bash
-python src/run_dataset.py --data-dir "data" --mode multi-agent --cases 2 --trace
+# Markdown Report to stdout or file
+python scripts/generate_report.py --run-id run_abc12345 --format markdown --out report.md
+
+# JSON Data Export
+python scripts/generate_report.py --run-id run_abc12345 --format json --out report.json
 ```
 
 ---
 
-## Running the Web Application
+## Running the Web Application Locally
 
 ### Launch FastAPI Backend
 ```bash
@@ -478,12 +550,12 @@ Dashboard is accessible at `http://localhost:5173`.
 
 ## Automated Test Suite
 
-Run the full Python test suite (222 unit and integration tests):
+Run the full Python test suite (237 unit and integration tests):
 ```bash
 python -m pytest -v
 ```
 
-*Verified Test Results*: **222 passed, 2 skipped** (100% pass rate).
+*Verified Test Results*: **237 passed, 2 skipped** (100% pass rate).
 
 ---
 
@@ -500,8 +572,10 @@ python -m pytest -v
 
 ## Future Roadmap
 
+- **Semantic Veto for High-Value Proven Matches**: Gated multi-agent semantic verification over Layer-2-proven matches above configurable amount thresholds to detect coincidental arithmetic matches with conflicting narrative metadata.
 - **High-Throughput Scale Testing**: Benchmark Phase 1 and parallel batch execution across 10,000+ transaction batches.
 - **Latency-Aware Scheduling**: Dynamic batch scheduling based on historical per-exception-type execution latencies.
 - **Additional Data Converters**: Expand `src/normalizer/` with additional ERP export formats (SAP, NetSuite, QuickBooks).
 - **Advanced Operational Analytics**: Extended analytics for tracking merchant adjustment recovery rates over time.
+
 

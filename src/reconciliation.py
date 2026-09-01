@@ -162,6 +162,21 @@ class ReconciliationEngine:
             result["difference"] = None
             return result
 
+        # All 6 checks passed — verify RECONCILED is actually justified,
+        # don't just assume it because nothing else fired.
+        if (
+            payment_dec == gross_dec
+            and (gross_dec - fee_dec) == net_dec
+            and bank_dec == expected_net_dec
+        ):
+            result["status"] = "RECONCILED"
+            result["reason"] = None
+            result["difference"] = 0
+        else:
+            result["status"] = "EXCEPTION"
+            result["reason"] = "UNCLASSIFIED_DISCREPANCY"
+            result["difference"] = None
+
         # All checks passed
         result["status"] = "RECONCILED"
         result["reason"] = None

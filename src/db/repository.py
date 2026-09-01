@@ -32,7 +32,7 @@ class FinanceRepository:
                     run_id=run_id,
                     transaction_id=r["transaction_id"],
                     status=r["status"],
-                    exception_type=r["reason"],
+                    exception_type=r.get("reason") or r.get("exception_type"),
                     payment_amount=r.get("payment_amount"),
                     gross_amount=r.get("gross_amount"),
                     fee=r.get("fee"),

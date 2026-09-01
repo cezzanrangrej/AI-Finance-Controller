@@ -348,3 +348,194 @@ def build_verifier_prompt(
 """
 
 
+BATCH_INVESTIGATOR_SYSTEM_PROMPT = """You are the INVESTIGATOR AGENT in a controlled financial multi-agent reconciliation architecture, operating in BATCH INVESTIGATION MODE.
+
+You are evaluating multiple independent finance exceptions in a single interaction.
+
+## Strict Rules & Isolation
+1. Every transaction in the batch is completely independent. Never cross-reference between different transaction IDs.
+2. Formulate an investigation proposal for each case based solely on its prefetched deterministic evidence.
+3. You must NEVER perform authoritative mental math yourself.
+4. Proposed resolution `AUTO_RESOLVED` is permitted ONLY when documented adjustments mathematically account for the discrepancy with zero contradictory evidence.
+5. For any unexplained discrepancy, missing record, duplicate bank credit, or contradictory data, propose `HUMAN_REVIEW`.
+6. Return EXACTLY ONE proposal for every transaction supplied in the batch.
+
+## Output Schema
+You MUST respond with a single JSON object matching this exact schema:
+{
+  "proposals": [
+    {
+      "transaction_id": "<exact input transaction ID>",
+      "proposed_resolution": "<AUTO_RESOLVED|HUMAN_REVIEW>",
+      "exception_type": "<string>",
+      "resolution_type": "<NONE|ADJUSTMENT_EXPLAINED|OTHER_EVIDENCE>",
+      "resolved_difference": <float or null>,
+      "reason": "<concise explanation for this transaction>",
+      "evidence": ["<fact 1>", "<fact 2>", ...],
+      "confidence": <float between 0.0 and 1.0>,
+      "recommended_action": "<concise recommended action for finance team>"
+    }
+  ]
+}
+
+Ensure every transaction in the input batch appears exactly once in the proposals list. Do not output any commentary outside the JSON object.
+"""
+
+
+def build_batch_investigator_prompt(cases: list) -> str:
+    """Formats multiple prefetched exception cases into a batch investigator message."""
+    cases_text = []
+
+    for idx, c in enumerate(cases, 1):
+        if hasattr(c, "model_dump"):
+            cdict = c.model_dump()
+        elif isinstance(c, dict):
+            cdict = c
+        else:
+            cdict = vars(c)
+
+        txn_id = cdict.get("transaction_id", "UNKNOWN")
+        exc_type = cdict.get("initial_exception", "UNKNOWN")
+        payment = cdict.get("payment")
+        ledger = cdict.get("ledger")
+        banks = cdict.get("bank_records", [])
+        adjs = cdict.get("adjustments", [])
+        dup = cdict.get("duplicate_check", {})
+        exp_settle = cdict.get("expected_settlement", {})
+        adj_settle = cdict.get("adjusted_expected_settlement", {})
+
+        p_amt = format_currency(payment.get("amount")) if payment and payment.get("amount") is not None else "None"
+        l_gross = format_currency(ledger.get("gross_amount")) if ledger and ledger.get("gross_amount") is not None else "None"
+        l_fee = format_currency(ledger.get("fee")) if ledger and ledger.get("fee") is not None else "None"
+        l_net = format_currency(ledger.get("net_amount")) if ledger and ledger.get("net_amount") is not None else "None"
+
+        b_lines = [f"{b.get('bank_reference')}: credited {format_currency(b.get('credited_amount', 0))}" for b in banks]
+        b_summary = ", ".join(b_lines) if b_lines else "None"
+
+        a_lines = [f"{a.get('adjustment_type')}: {format_currency(a.get('amount', 0))} ({a.get('reason', '')})" for a in adjs]
+        a_summary = "; ".join(a_lines) if a_lines else "None"
+
+        dup_str = f"Duplicate count = {dup.get('duplicate_count', 0)}, is_duplicate = {dup.get('is_duplicate', False)}" if dup else "None"
+        exp_str = f"Expected net = {format_currency(exp_settle.get('expected_net', 0))} ({exp_settle.get('calculation', '')})" if exp_settle else "None"
+        adj_str = f"Adjusted net = {format_currency(adj_settle.get('adjusted_expected_net', 0))} ({adj_settle.get('calculation', '')})" if adj_settle else "None"
+
+        case_block = f"""### Case {idx}: [{txn_id}] ({exc_type})
+- Payment: {p_amt}
+- Ledger: Gross = {l_gross}, Fee = {l_fee}, Net = {l_net}
+- Bank Records: {b_summary}
+- Adjustments: {a_summary}
+- Duplicate Check: {dup_str}
+- Deterministic Expected Settlement: {exp_str}
+- Deterministic Adjusted Settlement: {adj_str}
+"""
+        cases_text.append(case_block)
+
+    joined_cases = "\n".join(cases_text)
+
+    return f"""Please investigate the following {len(cases)} independent financial exceptions as the Investigator Agent.
+
+{joined_cases}
+
+## Instructions:
+1. Formulate an investigation proposal for each case based solely on its prefetched evidence.
+2. Return a valid JSON object with the `proposals` list containing exactly {len(cases)} entries matching the schema.
+"""
+
+
+BATCH_VERIFIER_SYSTEM_PROMPT = """You are the VERIFIER AGENT in a controlled financial multi-agent reconciliation architecture, operating in BATCH VERIFICATION MODE.
+
+You are independently verifying Investigator proposals for multiple independent finance exceptions in a single interaction.
+
+## Strict Verification Principles
+1. Independently and conservatively verify each proposal against its prefetched deterministic evidence.
+2. Check if the evidence and deterministic calculations strictly support the proposed resolution.
+3. The Verifier must be CONSERVATIVE: If evidence is incomplete, ambiguous, or contradictory, decide HUMAN_REVIEW.
+4. Do NOT perform mental arithmetic; rely on provided deterministic calculations.
+5. Return EXACTLY ONE verification result for every transaction in the batch.
+
+## Output Schema
+You MUST respond with a single JSON object matching this exact schema:
+{
+  "verifications": [
+    {
+      "transaction_id": "<exact input transaction ID>",
+      "verified": <true|false>,
+      "decision": "<AUTO_RESOLVED|HUMAN_REVIEW>",
+      "reason": "<concise verification explanation>",
+      "evidence_references": ["<reference supporting decision>", ...],
+      "contradictions": ["<contradiction or gap if any>", ...],
+      "confidence": <float between 0.0 and 1.0>
+    }
+  ]
+}
+
+Ensure every transaction appears exactly once in the verifications list. Do not output any commentary outside the JSON object.
+"""
+
+
+def build_batch_verifier_prompt(
+    cases: list,
+    proposals: list,
+) -> str:
+    """Formats multiple exception cases and their Investigator proposals for the Verifier Agent."""
+    cases_text = []
+    prop_by_txn = {p.get("transaction_id"): p for p in proposals}
+
+    for idx, c in enumerate(cases, 1):
+        if hasattr(c, "model_dump"):
+            cdict = c.model_dump()
+        elif isinstance(c, dict):
+            cdict = c
+        else:
+            cdict = vars(c)
+
+        txn_id = cdict.get("transaction_id", "UNKNOWN")
+        exc_type = cdict.get("initial_exception", "UNKNOWN")
+        prop = prop_by_txn.get(txn_id, {})
+        prop_res = prop.get("proposed_resolution") or prop.get("decision", "HUMAN_REVIEW")
+        prop_reason = prop.get("reason", "No reason provided")
+
+        payment = cdict.get("payment")
+        ledger = cdict.get("ledger")
+        banks = cdict.get("bank_records", [])
+        adjs = cdict.get("adjustments", [])
+        dup = cdict.get("duplicate_check", {})
+        exp_settle = cdict.get("expected_settlement", {})
+        adj_settle = cdict.get("adjusted_expected_settlement", {})
+
+        p_amt = format_currency(payment.get("amount")) if payment and payment.get("amount") is not None else "None"
+        l_gross = format_currency(ledger.get("gross_amount")) if ledger and ledger.get("gross_amount") is not None else "None"
+        l_fee = format_currency(ledger.get("fee")) if ledger and ledger.get("fee") is not None else "None"
+        l_net = format_currency(ledger.get("net_amount")) if ledger and ledger.get("net_amount") is not None else "None"
+
+        b_lines = [f"{b.get('bank_reference')}: credited {format_currency(b.get('credited_amount', 0))}" for b in banks]
+        b_summary = ", ".join(b_lines) if b_lines else "None"
+
+        a_lines = [f"{a.get('adjustment_type')}: {format_currency(a.get('amount', 0))} ({a.get('reason', '')})" for a in adjs]
+        a_summary = "; ".join(a_lines) if a_lines else "None"
+
+        dup_str = f"Duplicate count = {dup.get('duplicate_count', 0)}, is_duplicate = {dup.get('is_duplicate', False)}" if dup else "None"
+        exp_str = f"Expected net = {format_currency(exp_settle.get('expected_net', 0))}" if exp_settle else "None"
+        adj_str = f"Adjusted net = {format_currency(adj_settle.get('adjusted_expected_net', 0))}" if adj_settle else "None"
+
+        case_block = f"""### Case {idx}: [{txn_id}] ({exc_type})
+- Payment: {p_amt} | Ledger Gross: {l_gross} | Fee: {l_fee} | Ledger Net: {l_net}
+- Bank: {b_summary} | Adjustments: {a_summary} | Duplicates: {dup_str}
+- Deterministic Expected: {exp_str} | Adjusted: {adj_str}
+- Investigator Proposal: {prop_res} ({prop_reason})
+"""
+        cases_text.append(case_block)
+
+    joined_cases = "\n".join(cases_text)
+
+    return f"""Please independently verify the following {len(cases)} Investigator proposals.
+
+{joined_cases}
+
+## Instructions:
+1. Check each proposal against the prefetched deterministic evidence.
+2. Return a valid JSON object with the `verifications` list containing exactly {len(cases)} entries matching the schema.
+"""
+
+
+

@@ -213,6 +213,7 @@ async def run_parallel_batches(
 
             # Emit case-level & batch-level SSE updates immediately
             if event_callback:
+                now_iso = datetime.now(timezone.utc).isoformat()
                 for d in decisions:
                     event_callback({
                         "event": "case_completed",
@@ -223,7 +224,7 @@ async def run_parallel_batches(
                         "resolution_type": d.resolution_type or "NONE",
                         "confidence": d.confidence,
                         "reason": d.reason,
-                        "timestamp": time.time(),
+                        "timestamp": now_iso,
                     })
 
                 event_callback({
@@ -238,7 +239,7 @@ async def run_parallel_batches(
                     "total_cases": cases_per_run,
                     "batch_time_sec": round(duration, 4),
                     "results": [d.model_dump(mode="json") for d in decisions],
-                    "timestamp": time.time(),
+                    "timestamp": now_iso,
                 })
 
             # Thread-safe write for partial persistence after each batch completes
@@ -266,7 +267,7 @@ async def run_parallel_batches(
                         "accuracy": batch_eval_res.phase2_decision_accuracy,
                         "precision": batch_eval_res.auto_resolution_precision,
                         "recall": batch_eval_res.auto_resolution_recall,
-                        "timestamp": time.time(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
 
                 partial_report = {

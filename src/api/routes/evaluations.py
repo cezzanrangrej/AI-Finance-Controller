@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from src.api.schemas import EvaluationGroupSummaryResponse, EvaluationRunRequest
-from src.run_llm_eval import run_evaluation
+from scripts.run_llm_eval import run_evaluation
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.abspath(os.path.join(_current_dir, "..", "..", ".."))
@@ -28,7 +28,7 @@ def trigger_evaluation(request: EvaluationRunRequest) -> Dict[str, Any]:
     try:
         result = run_evaluation(
             provider=request.provider,
-            cases=request.cases_per_run or 5,
+            cases=request.cases_per_run,
             runs=request.runs or 1,
             batch_size=request.batch_size if request.batch_size is not None else 5,
             parallel_batches=request.parallel_batches,
@@ -65,7 +65,7 @@ def start_streaming_evaluation(request: EvaluationRunRequest) -> Dict[str, Any]:
         try:
             res = run_evaluation(
                 provider=request.provider,
-                cases=request.cases_per_run or 5,
+                cases=request.cases_per_run,
                 runs=request.runs or 1,
                 batch_size=request.batch_size if request.batch_size is not None else 5,
                 parallel_batches=request.parallel_batches,
@@ -115,10 +115,12 @@ def stream_evaluation_events(group_id: str):
             try:
                 event_data = event_q.get(timeout=30.0)
                 if event_data.get("event") == "_stream_closed":
+                    _ACTIVE_STREAMS.pop(group_id, None)
                     break
                 event_name = event_data.get("event", "message")
                 yield f"event: {event_name}\ndata: {json.dumps(event_data)}\n\n"
                 if event_name in ("run_completed", "run_error"):
+                    _ACTIVE_STREAMS.pop(group_id, None)
                     break
             except queue.Empty:
                 # Keep-alive heartbeat comment

@@ -316,4 +316,60 @@ def test_export_run_transactions_csv():
     assert "Bank Amount" in lines[0]
 
 
+def test_get_run_report_api():
+    """Test 19: GET /api/runs/{run_id}/report returns Markdown and JSON report formats."""
+    list_resp = client.get("/api/runs")
+    run_id = list_resp.json()[0]["run_id"]
+
+    # Markdown format
+    resp_md = client.get(f"/api/runs/{run_id}/report?format=markdown")
+    assert resp_md.status_code == 200
+    assert "# Financial Reconciliation Exception Report" in resp_md.text
+    assert run_id in resp_md.text
+
+    # JSON format
+    resp_json = client.get(f"/api/runs/{run_id}/report?format=json")
+    assert resp_json.status_code == 200
+    data = resp_json.json()
+    assert data["run_id"] == run_id
+    assert "summary" in data
+
+    # Downloadable Markdown
+    resp_dl = client.get(f"/api/runs/{run_id}/report?format=markdown&download=true")
+    assert resp_dl.status_code == 200
+    assert "attachment" in resp_dl.headers.get("content-disposition", "")
+    assert f"reconciliation_report_{run_id}.md" in resp_dl.headers.get("content-disposition", "")
+
+
+def test_upload_start_and_stream_sse():
+    """Test 20: POST /api/runs/upload/start initiates asynchronous streaming and GET /api/runs/{run_id}/stream yields SSE events."""
+    p_csv = "transaction_id,amount,currency\nTXN_S1,100.00,USD\nTXN_S2,250.00,USD\n"
+    l_csv = "transaction_id,gross_amount,fee,net_amount,currency\nTXN_S1,100.00,2.50,97.50,USD\nTXN_S2,250.00,5.00,245.00,USD\n"
+    b_csv = "transaction_id,amount,credited_amount,currency\nTXN_S1,97.50,97.50,USD\nTXN_S2,245.00,245.00,USD\n"
+
+    files = {
+        "payments": ("payments.csv", p_csv, "text/csv"),
+        "ledger": ("ledger.csv", l_csv, "text/csv"),
+        "bank": ("bank.csv", b_csv, "text/csv"),
+    }
+    data = {"provider": "demo", "batch_size": "5"}
+    start_resp = client.post("/api/runs/upload/start", files=files, data=data)
+    assert start_resp.status_code == 202
+    start_json = start_resp.json()
+    assert "run_id" in start_json
+    assert "stream_url" in start_json
+    assert start_json["status"] == "STARTED"
+
+    run_id = start_json["run_id"]
+
+    # Read SSE stream
+    stream_resp = client.get(f"/api/runs/{run_id}/stream")
+    assert stream_resp.status_code == 200
+    assert "text/event-stream" in stream_resp.headers["content-type"]
+
+    events = stream_resp.text
+    assert "phase1_started" in events or "run_completed" in events
+
+
+
 

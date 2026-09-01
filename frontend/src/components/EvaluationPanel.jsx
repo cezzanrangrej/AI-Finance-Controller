@@ -15,15 +15,15 @@ export default function EvaluationPanel({
   const isCompleted = workflowState === 'COMPLETED';
   const isFailed = workflowState === 'FAILED';
 
-  const totalRecords = metrics?.total_records ?? 100;
-  const initialReconciled = metrics?.initial_reconciled ?? 87;
-  const initialExceptions = metrics?.initial_exceptions ?? (totalRecords - initialReconciled);
+  const totalRecords = metrics?.total_records ?? 0;
+  const initialReconciled = metrics?.initial_reconciled ?? 0;
+  const initialExceptions = metrics?.initial_exceptions ?? (totalRecords >= initialReconciled ? totalRecords - initialReconciled : 0);
   const aiAutoResolved = metrics?.ai_auto_resolved ?? metrics?.ai_resolved ?? 0;
-  const humanReview = metrics?.human_review ?? (initialExceptions - aiAutoResolved);
+  const humanReview = metrics?.human_review ?? (initialExceptions >= aiAutoResolved ? initialExceptions - aiAutoResolved : 0);
 
-  const initialMatchRate = metrics?.initial_match_rate ?? ((initialReconciled / totalRecords) * 100);
-  const finalResolutionRate = metrics?.final_resolution_rate ?? (((initialReconciled + aiAutoResolved) / totalRecords) * 100);
-  const aiResolutionRate = metrics?.ai_resolution_rate ?? (initialExceptions > 0 ? (aiAutoResolved / initialExceptions) * 100 : 0);
+  const initialMatchRate = metrics?.initial_match_rate ?? (totalRecords > 0 ? (initialReconciled / totalRecords) * 100 : 0);
+  const finalResolutionRate = metrics?.final_resolution_rate ?? (totalRecords > 0 ? ((initialReconciled + aiAutoResolved) / totalRecords) * 100 : 0);
+  const aiResolutionRate = metrics?.agent_resolution_rate ?? metrics?.ai_resolution_rate ?? (initialExceptions > 0 ? (aiAutoResolved / initialExceptions) * 100 : 0);
 
   const hasGroundTruth = Boolean(metrics?.has_ground_truth || metrics?.ground_truth_accuracy != null || metrics?.phase2_accuracy != null);
   const phase2Accuracy = metrics?.phase2_accuracy ?? metrics?.ground_truth_accuracy;
@@ -33,24 +33,24 @@ export default function EvaluationPanel({
   const batchList = streamingState?.batches ? Object.values(streamingState.batches) : [];
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-6 shadow-xs">
+    <div className="bg-background border border-border rounded-lg p-6 space-y-6 shadow-xs">
       
       {/* 1. UPLOADING STATE */}
       {isUploading && (
-        <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-5 space-y-3">
+        <div className="bg-primary/10 border border-primary/30 rounded-lg p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+              <Loader2 className="h-5 w-5 text-primary animate-spin" />
               <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                <h3 className="text-sm font-bold text-text uppercase tracking-wide">
                   Uploading Source Datasets
                 </h3>
-                <p className="text-xs text-slate-600 font-mono">
+                <p className="text-xs text-text-secondary font-mono">
                   Streaming source CSV files to server...
                 </p>
               </div>
             </div>
-            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-blue-100 text-blue-800 border border-blue-200">
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-primary/15 text-primary border border-primary/30">
               Uploading
             </span>
           </div>
@@ -59,20 +59,20 @@ export default function EvaluationPanel({
 
       {/* 2. VALIDATING STATE */}
       {isValidating && (
-        <div className="bg-purple-50/70 border border-purple-200 rounded-lg p-5 space-y-3">
+        <div className="bg-accent-purple/10 border border-accent-purple/30 rounded-lg p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+              <Loader2 className="h-5 w-5 text-accent-purple animate-spin" />
               <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                <h3 className="text-sm font-bold text-text uppercase tracking-wide">
                   Validating Invariants
                 </h3>
-                <p className="text-xs text-slate-600 font-mono">
+                <p className="text-xs text-text-secondary font-mono">
                   Checking schema columns and Decimal precision invariants...
                 </p>
               </div>
             </div>
-            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-accent-purple/15 text-accent-purple border border-accent-purple/30">
               Validating
             </span>
           </div>
@@ -81,20 +81,20 @@ export default function EvaluationPanel({
 
       {/* 3. STARTING_RECONCILIATION STATE */}
       {isStarting && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-5 space-y-3">
+        <div className="bg-accent-coral/10 border border-accent-coral/30 rounded-lg p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <Loader2 className="h-5 w-5 text-amber-600 animate-spin" />
+              <Loader2 className="h-5 w-5 text-accent-coral animate-spin" />
               <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                <h3 className="text-sm font-bold text-text uppercase tracking-wide">
                   Starting Reconciliation
                 </h3>
-                <p className="text-xs text-slate-600 font-mono">
+                <p className="text-xs text-text-secondary font-mono">
                   Initializing reconciliation pipeline and worker threads...
                 </p>
               </div>
             </div>
-            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-accent-coral/15 text-accent-coral border border-accent-coral/30">
               Initializing
             </span>
           </div>
@@ -103,47 +103,47 @@ export default function EvaluationPanel({
 
       {/* 4. RUNNING_PHASE_1 STATE */}
       {isRunningPhase1 && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-5 space-y-3">
+        <div className="bg-accent-coral/10 border border-accent-coral/30 rounded-lg p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <Loader2 className="h-5 w-5 text-amber-600 animate-spin" />
+              <Loader2 className="h-5 w-5 text-accent-coral animate-spin" />
               <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                <h3 className="text-sm font-bold text-text uppercase tracking-wide">
                   Phase 1 Execution
                 </h3>
-                <p className="text-xs text-slate-600 font-mono">
+                <p className="text-xs text-text-secondary font-mono">
                   Phase 1: Deterministic Double-Entry Engine reconciling 4-source records...
                 </p>
               </div>
             </div>
-            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded bg-accent-coral/15 text-accent-coral border border-accent-coral/30">
               Phase 1 Engine
             </span>
           </div>
 
-          <div className="w-full bg-amber-200/60 h-2 rounded-full overflow-hidden">
-            <div className="bg-amber-500 h-full w-1/3 animate-pulse rounded-full" />
+          <div className="w-full bg-accent-coral/20 h-2 rounded-full overflow-hidden">
+            <div className="bg-accent-coral h-full w-1/3 animate-pulse rounded-full" />
           </div>
         </div>
       )}
 
       {/* 2. RUNNING_AI STATE (Progressive SSE Execution & Compact Batch Tracker) */}
       {(isRunningAI || (streamingState && streamingState.isStreaming)) && (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="bg-surface border border-border rounded-lg p-5 space-y-4">
           
           {/* Phase 1 Complete Summary Banner */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-800">
+              <CheckCircle2 className="h-4 w-4 text-text" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-text">
                 Phase 1 Complete
               </span>
-              <span className="text-xs font-mono text-slate-600">
+              <span className="text-xs font-mono text-text-secondary">
                 ({totalRecords} records processed · {initialReconciled} reconciled · <strong>{initialExceptions} exceptions detected</strong>)
               </span>
             </div>
 
-            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold self-start sm:self-auto">
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded bg-accent-green/10 text-text border border-accent-green/30 font-semibold self-start sm:self-auto">
               Auto-Queued {streamingState?.totalCases || initialExceptions} Cases
             </span>
           </div>
@@ -151,24 +151,24 @@ export default function EvaluationPanel({
           {/* AI Investigation Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 text-emerald-600 animate-spin" />
-              <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+              <Loader2 className="h-4 w-4 text-accent-purple animate-spin" />
+              <span className="text-xs font-bold text-text uppercase tracking-wider">
                 AI Parallel Investigation
               </span>
-              <span className="text-xs font-mono text-slate-500">
+              <span className="text-xs font-mono text-text-secondary/60">
                 ({streamingState?.totalBatches || 3} batches running in parallel)
               </span>
             </div>
 
-            <div className="text-xs font-mono text-slate-700">
+            <div className="text-xs font-mono text-text-secondary">
               <strong>{streamingState?.casesCompleted || 0}</strong> / {streamingState?.totalCases || initialExceptions} cases completed
             </div>
           </div>
 
           {/* Compact Progress Bar */}
-          <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+          <div className="w-full bg-border h-2.5 rounded-full overflow-hidden">
             <div
-              className="bg-emerald-500 h-full transition-all duration-300 rounded-full"
+              className="bg-primary h-full transition-all duration-300 rounded-full"
               style={{
                 width: `${streamingState?.totalCases ? Math.min(100, ((streamingState.casesCompleted || 0) / streamingState.totalCases) * 100) : 0}%`,
               }}
@@ -183,22 +183,22 @@ export default function EvaluationPanel({
                   key={b.batchNumber}
                   className={`px-3 py-1.5 rounded-md border flex items-center gap-2 transition-all ${
                     b.status === 'COMPLETED'
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      ? 'bg-accent-green/10 border-accent-green/30 text-text'
                       : b.status === 'RUNNING'
-                      ? 'bg-amber-50 border-amber-300 text-amber-900 animate-pulse'
-                      : 'bg-white border-slate-200 text-slate-600'
+                      ? 'bg-accent-coral/10 border-accent-coral/30 text-text animate-pulse'
+                      : 'bg-background border-border text-text-secondary'
                   }`}
                 >
                   {b.status === 'COMPLETED' ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-text flex-shrink-0" />
                   ) : b.status === 'RUNNING' ? (
-                    <Loader2 className="h-3.5 w-3.5 text-amber-600 animate-spin flex-shrink-0" />
+                    <Loader2 className="h-3.5 w-3.5 text-accent-coral animate-spin flex-shrink-0" />
                   ) : (
-                    <span className="h-2 w-2 rounded-full bg-slate-300" />
+                    <span className="h-2 w-2 rounded-full bg-border" />
                   )}
                   <span className="font-semibold">Batch #{b.batchNumber}</span>
-                  <span className="text-[11px] text-slate-500">({b.caseCount} cases)</span>
-                  {b.durationSec && <span className="text-[10px] text-emerald-700 font-bold">{b.durationSec.toFixed(2)}s</span>}
+                  <span className="text-[11px] text-text-secondary/60">({b.caseCount} cases)</span>
+                  {b.durationSec && <span className="text-[10px] text-text font-bold">{b.durationSec.toFixed(2)}s</span>}
                 </div>
               ))}
             </div>
@@ -233,24 +233,24 @@ export default function EvaluationPanel({
         <div className="space-y-6">
           
           {/* Completion Banner */}
-          <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="bg-accent-green/10 border border-accent-green/30 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                <ShieldCheck className="h-4 w-4 text-text" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-text">
                   Reconciliation Complete
                 </h3>
               </div>
-              <p className="text-xs text-emerald-800 font-mono mt-1">
+              <p className="text-xs text-text-secondary font-mono mt-1">
                 <strong>{totalRecords}</strong> records processed · <strong>{initialReconciled}</strong> initial match · <strong>{initialExceptions}</strong> exceptions investigated
               </p>
             </div>
 
             <div className="flex items-center gap-3 text-xs font-mono">
-              <div className="bg-white px-3 py-1.5 rounded border border-emerald-200 text-emerald-800">
+              <div className="bg-background px-3 py-1.5 rounded border border-accent-green/30 text-text">
                 AI Auto-Resolved: <strong>{aiAutoResolved}</strong>
               </div>
-              <div className="bg-white px-3 py-1.5 rounded border border-amber-200 text-amber-800">
+              <div className="bg-background px-3 py-1.5 rounded border border-accent-coral/30 text-text">
                 Human Review: <strong>{humanReview}</strong>
               </div>
             </div>
@@ -258,65 +258,65 @@ export default function EvaluationPanel({
 
           {/* Operational Metrics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+            <div className="bg-surface border border-border rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block mb-1">
                 Initial Match Rate
               </span>
-              <div className="text-2xl font-bold font-mono text-slate-900">
+              <div className="text-2xl font-bold font-mono text-text">
                 {initialMatchRate.toFixed(1)}%
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">Phase 1 double-entry match rate.</p>
+              <p className="text-[11px] text-text-secondary mt-1">Phase 1 double-entry match rate.</p>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+            <div className="bg-surface border border-border rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block mb-1">
                 Final Resolution Rate
               </span>
-              <div className="text-2xl font-bold font-mono text-emerald-700">
+              <div className="text-2xl font-bold font-mono text-primary">
                 {finalResolutionRate.toFixed(1)}%
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">Total resolved (Phase 1 + AI auto-resolved).</p>
+              <p className="text-[11px] text-text-secondary mt-1">Total resolved (Phase 1 + AI auto-resolved).</p>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+            <div className="bg-surface border border-border rounded-lg p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block mb-1">
                 AI Exception Resolution
               </span>
-              <div className="text-2xl font-bold font-mono text-emerald-700">
+              <div className="text-2xl font-bold font-mono text-primary">
                 {aiResolutionRate.toFixed(1)}%
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">Exceptions resolved with financial proof.</p>
+              <p className="text-[11px] text-text-secondary mt-1">Exceptions resolved with financial proof.</p>
             </div>
           </div>
 
           {/* Ground Truth Benchmark Metrics (ONLY DISPLAYED IF GROUND TRUTH EXISTS) */}
           {hasGroundTruth && (
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+            <div className="bg-surface border border-border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-border pb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-text">
                   Ground Truth Benchmark Accuracy
                 </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-accent-green/10 text-text border border-accent-green/30 font-medium">
                   Verified Ground Truth
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
-                <div className="bg-white p-3 rounded border border-slate-200">
-                  <span className="text-[10px] text-slate-400 block font-sans">Decision Accuracy</span>
-                  <span className="text-lg font-bold text-slate-900">
+                <div className="bg-background p-3 rounded border border-border">
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Decision Accuracy</span>
+                  <span className="text-lg font-bold text-text">
                     {phase2Accuracy != null ? `${Number(phase2Accuracy).toFixed(1)}%` : '—'}
                   </span>
                 </div>
-                <div className="bg-white p-3 rounded border border-slate-200">
-                  <span className="text-[10px] text-slate-400 block font-sans">Precision (Zero False Positives)</span>
-                  <span className="text-lg font-bold text-emerald-700">
+                <div className="bg-background p-3 rounded border border-border">
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Precision (Zero False Positives)</span>
+                  <span className="text-lg font-bold text-primary">
                     {precision != null ? `${Number(precision).toFixed(1)}%` : '—'}
                   </span>
                 </div>
-                <div className="bg-white p-3 rounded border border-slate-200">
-                  <span className="text-[10px] text-slate-400 block font-sans">Recall (Explainable Recovery)</span>
-                  <span className="text-lg font-bold text-emerald-700">
+                <div className="bg-background p-3 rounded border border-border">
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Recall (Explainable Recovery)</span>
+                  <span className="text-lg font-bold text-primary">
                     {recall != null ? `${Number(recall).toFixed(1)}%` : '—'}
                   </span>
                 </div>

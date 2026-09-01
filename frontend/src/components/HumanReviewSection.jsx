@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { ArrowUpRight, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
 
 export default function HumanReviewSection({ exceptions, onSelectException }) {
@@ -17,18 +17,18 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
       
       {/* 1. AI INVESTIGATIONS (AUTO-RESOLVED WITH PROOF) */}
       {autoResolvedCases.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-2">
+        <div className="bg-background border border-border rounded-lg p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-border gap-2">
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-sm font-semibold text-slate-900">
+                <h2 className="text-sm font-semibold text-text">
                   AI Investigations
                 </h2>
-                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-accent-green/10 text-text border border-accent-green/30">
                   {autoResolvedCases.length} Auto-Resolved
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-text-secondary mt-0.5">
                 Evidence-backed resolutions produced by the finance investigation agent.
               </p>
             </div>
@@ -39,28 +39,28 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
               <div
                 key={item.transaction_id}
                 onClick={() => onSelectException(item.transaction_id)}
-                className="bg-slate-50/70 border border-slate-200 hover:border-emerald-500/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
+                className="bg-surface border border-border hover:border-accent-green/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
               >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-xs text-slate-900 group-hover:text-emerald-600 transition-colors">
+                    <span className="font-mono font-bold text-xs text-text group-hover:text-primary transition-colors">
                       {item.transaction_id}
                     </span>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-emerald-100/60 text-emerald-800 border border-emerald-200">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-600" /> AUTO-RESOLVED
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-accent-green/10 text-text border border-accent-green/30">
+                      <CheckCircle2 className="h-3 w-3 text-text" /> AUTO-RESOLVED
                     </span>
                   </div>
 
-                  <div className="text-[11px] font-mono text-slate-500 mt-1">
+                  <div className="text-[11px] font-mono text-text-secondary mt-1">
                     {item.exception_type}
                   </div>
 
-                  <p className="text-xs text-slate-600 mt-2.5 line-clamp-3 leading-relaxed">
+                  <p className="text-xs text-text-secondary mt-2.5 line-clamp-3 leading-relaxed">
                     {item.reason}
                   </p>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-between text-xs text-emerald-700 font-medium group-hover:text-emerald-800">
+                <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs text-text font-medium group-hover:text-primary">
                   <span>View evidence</span>
                   <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                 </div>
@@ -71,18 +71,18 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
       )}
 
       {/* 2. NEEDS HUMAN REVIEW QUEUE */}
-      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-2">
+      <div className="bg-background border border-border rounded-lg p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-border gap-2">
           <div>
             <div className="flex items-center gap-2.5">
-              <h2 className="text-sm font-semibold text-slate-900">
+              <h2 className="text-sm font-semibold text-text">
                 Needs Human Review
               </h2>
-              <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+              <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-accent-coral/10 text-text border border-accent-coral/30">
                 {humanReviewCases.length} Pending
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-text-secondary mt-0.5">
               Exceptions where available evidence was insufficient or contradictory.
             </p>
           </div>
@@ -92,9 +92,9 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
             {Object.entries(categoryCounts).map(([cat, count]) => (
               <span
                 key={cat}
-                className="text-[10px] font-mono bg-slate-50 border border-slate-200 text-slate-600 px-2 py-0.5 rounded"
+                className="text-[10px] font-mono bg-surface border border-border text-text-secondary px-2 py-0.5 rounded"
               >
-                {cat.replace(/_RECORD|_ERROR/g, '').replace(/_/g, ' ')}: <strong className="text-slate-900">{count}</strong>
+                {cat.replace(/_RECORD|_ERROR/g, '').replace(/_/g, ' ')}: <strong className="text-text">{count}</strong>
               </span>
             ))}
           </div>
@@ -105,28 +105,34 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
             <div
               key={item.transaction_id}
               onClick={() => onSelectException(item.transaction_id)}
-              className="bg-slate-50/70 border border-slate-200 hover:border-amber-500/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
+              className="bg-surface border border-border hover:border-accent-coral/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
             >
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-xs text-slate-900 group-hover:text-amber-600 transition-colors">
+                  <span className="font-mono font-bold text-xs text-text group-hover:text-accent-coral transition-colors">
                     {item.transaction_id}
                   </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-amber-100/60 text-amber-800 border border-amber-200">
-                    <AlertTriangle className="h-3 w-3 text-amber-600" /> HUMAN REVIEW
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-accent-coral/10 text-text border border-accent-coral/30">
+                    <AlertTriangle className="h-3 w-3 text-accent-coral" /> HUMAN REVIEW
                   </span>
                 </div>
 
-                <div className="text-[11px] font-mono text-slate-500 mt-1">
+                <div className="text-[11px] font-mono text-text-secondary mt-1">
                   {item.exception_type}
                 </div>
 
-                <p className="text-xs text-slate-600 mt-2.5 line-clamp-3 leading-relaxed">
+                <p className="text-xs text-text-secondary mt-2 line-clamp-2 leading-relaxed">
                   {item.reason}
                 </p>
+
+                {item.recommended_action && (
+                  <div className="mt-2 text-[11px] font-sans text-text bg-accent-coral/10 border border-accent-coral/30 px-2 py-1 rounded">
+                    <span className="font-semibold text-text">Action:</span> {item.recommended_action}
+                  </div>
+                )}
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-between text-xs text-amber-700 font-medium group-hover:text-amber-800">
+              <div className="mt-3 pt-2.5 border-t border-border flex items-center justify-between text-xs text-text font-medium group-hover:text-accent-coral">
                 <span>Review case</span>
                 <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </div>

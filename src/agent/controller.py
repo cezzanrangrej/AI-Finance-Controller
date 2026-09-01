@@ -22,6 +22,7 @@ if _project_root not in sys.path:
 
 from decimal import Decimal
 from src.agent.prompts import SYSTEM_PROMPT, build_investigation_prompt
+from src.config import settings
 from src.agent.schemas import AgentDecision, InvestigationLog, ToolCallTrace
 from src.agent.tools import FinancialToolkit
 from src.utils.formatters import format_amount, format_currency, safe_decimal, safe_float, safe_int, safe_numeric
@@ -150,6 +151,7 @@ class DemoLLMClient:
                 batch_decisions.append({
                     "transaction_id": txn_id,
                     "decision": dec,
+                    "proposed_resolution": dec,
                     "exception_type": exc_type,
                     "resolution_type": res_type,
                     "resolved_difference": diff,
@@ -159,7 +161,27 @@ class DemoLLMClient:
                     "recommended_action": action,
                 })
 
-            resp_payload = {"decisions": batch_decisions}
+            # Check if this is a batch verification or batch investigator request
+            is_batch_verifier = any("BATCH VERIFICATION MODE" in (m.get("content") or "") for m in messages)
+            is_batch_investigator = any("proposals" in (m.get("content") or "") for m in messages)
+
+            if is_batch_verifier:
+                batch_verifications = []
+                for d in batch_decisions:
+                    batch_verifications.append({
+                        "transaction_id": d["transaction_id"],
+                        "verified": True,
+                        "decision": d["decision"],
+                        "reason": f"Independent batch verification confirmed: {d['reason']}",
+                        "evidence_references": ["Deterministic calculation and prefetched evidence verified."],
+                        "contradictions": [],
+                        "confidence": d["confidence"],
+                    })
+                resp_payload = {"verifications": batch_verifications}
+            elif is_batch_investigator:
+                resp_payload = {"proposals": batch_decisions}
+            else:
+                resp_payload = {"decisions": batch_decisions}
 
             class BatchDemoMessage:
                 content = json.dumps(resp_payload)
@@ -445,12 +467,12 @@ class LLMClient:
         model: Optional[str] = None,
     ) -> Any:
         selected_provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
-        env_or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-        env_gem_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-        env_grok_key = (os.getenv("INVESTIGATOR_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
+        env_or_key = (api_key or os.getenv("OPENROUTER_API_KEY") or "").strip()
+        env_gem_key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+        env_grok_key = (api_key or os.getenv("INVESTIGATOR_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
 
         if not selected_provider:
-            if env_or_key:
+            if env_or_key and os.getenv("OPENROUTER_MODEL"):
                 selected_provider = "openrouter"
             elif env_gem_key:
                 selected_provider = "gemini"

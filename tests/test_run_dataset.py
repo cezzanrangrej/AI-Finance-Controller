@@ -10,7 +10,7 @@ import pytest
 
 from src.generator import SyntheticDataGenerator
 from src.reconciliation import ReconciliationEngine
-from src.run_dataset import (
+from scripts.run_dataset import (
     load_dataset,
     validate_dataset_dir,
     detect_source_type,
@@ -184,9 +184,9 @@ def test_batch_mode_integration(temp_dataset_dir):
     mock_log = MagicMock()
     mock_log.batch_size = 1
     mock_log.fallback_count = 0
-    mock_log.llm_interactions = 1
+    mock_log.llm_interactions = 2
 
-    with patch("src.run_dataset.BatchAgentController") as mock_batch_cls:
+    with patch("src.agent.multi_agent.batch_multi_agent_controller.BatchMultiAgentController") as mock_batch_cls:
         mock_instance = mock_batch_cls.return_value
         mock_instance.investigate_batch.return_value = ([mock_decision], mock_log)
 
@@ -209,7 +209,7 @@ def test_individual_mode_integration(temp_dataset_dir):
     mock_decision = make_test_decision("TXN001", "HUMAN_REVIEW", "NONE")
     mock_log = MagicMock(spec=InvestigationLog)
 
-    with patch("src.run_dataset.AgentController") as mock_agent_cls:
+    with patch("scripts.run_dataset.AgentController") as mock_agent_cls:
         mock_instance = mock_agent_cls.return_value
         mock_instance.investigate_exception.return_value = (mock_decision, mock_log)
 
@@ -231,12 +231,13 @@ def test_multi_agent_integration(temp_dataset_dir):
 
     mock_decision = make_test_decision("TXN001", "AUTO_RESOLVED", "ADJUSTMENT_EXPLAINED")
     mock_log = MagicMock()
-    mock_log.investigator_calls = 1
-    mock_log.verifier_calls = 1
+    mock_log.batch_size = 1
+    mock_log.fallback_count = 0
+    mock_log.llm_interactions = 2
 
-    with patch("src.agent.multi_agent.orchestrator.MultiAgentOrchestrator") as mock_orch_cls:
-        mock_instance = mock_orch_cls.return_value
-        mock_instance.investigate_exception.return_value = (mock_decision, mock_log)
+    with patch("src.agent.multi_agent.batch_multi_agent_controller.BatchMultiAgentController") as mock_batch_cls:
+        mock_instance = mock_batch_cls.return_value
+        mock_instance.investigate_batch.return_value = ([mock_decision], mock_log)
 
         exit_code = main([
             "--data-dir", data_dir,
@@ -245,7 +246,7 @@ def test_multi_agent_integration(temp_dataset_dir):
             "--cases", "1",
         ])
         assert exit_code == 0
-        assert mock_instance.investigate_exception.called
+        assert mock_instance.investigate_batch.called
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +284,7 @@ def test_ground_truth_evaluation_output_when_present(temp_dataset_dir, capsys):
     mock_log.fallback_count = 0
     mock_log.llm_interactions = 1
 
-    with patch("src.run_dataset.BatchAgentController") as mock_batch_cls:
+    with patch("scripts.run_dataset.BatchAgentController") as mock_batch_cls:
         mock_instance = mock_batch_cls.return_value
         mock_instance.investigate_batch.return_value = ([mock_decision], mock_log)
 

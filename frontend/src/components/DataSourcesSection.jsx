@@ -82,16 +82,16 @@ export default function DataSourcesSection({
   const allRequiredPresent = Boolean(files.payments && files.ledger && files.bank);
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-xs space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+    <div className="bg-background rounded-lg border border-border p-6 shadow-xs space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-border">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Financial Data Sources</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h2 className="text-base font-semibold text-text">Financial Data Sources</h2>
+          <p className="text-xs text-text-secondary mt-0.5">
             Upload your payment gateway export, ERP general ledger, and bank settlement statements.
           </p>
         </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-50 border border-slate-200 text-xs font-mono text-slate-600 self-start sm:self-auto">
-          <Database className="h-3.5 w-3.5 text-slate-400" />
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface border border-border text-xs font-mono text-text-secondary self-start sm:self-auto">
+          <Database className="h-3.5 w-3.5 text-text-secondary/60" />
           <span>4-Source Double-Entry Verification</span>
         </div>
       </div>
@@ -111,18 +111,18 @@ export default function DataSourcesSection({
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => handleDrop('payments', e)}
-          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors bg-slate-50/50 ${
-            files.payments ? 'border-emerald-400 bg-emerald-50/20' : 'border-slate-300 hover:border-slate-400'
+          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors ${
+            files.payments ? 'border-accent-green/40 bg-accent-green/10' : 'bg-surface border-border hover:border-text-secondary/60'
           }`}
         >
           <div>
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-semibold text-slate-900">1. PAYMENTS</span>
-              <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+              <span className="font-semibold text-text">1. PAYMENTS</span>
+              <span className="text-[10px] font-medium text-text bg-accent-green/10 border border-accent-green/30 px-1.5 py-0.5 rounded">
                 Required
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-[11px] text-text-secondary mb-3">
               Gateway transactions (`transaction_id`, `amount`)
             </p>
           </div>
@@ -137,17 +137,17 @@ export default function DataSourcesSection({
             />
 
             {files.payments ? (
-              <div className="bg-white border border-emerald-200 p-2.5 rounded-md text-xs space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-700 font-medium truncate">
-                  <FileCheck className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+              <div className="bg-background border border-accent-green/30 p-2.5 rounded-md text-xs space-y-1">
+                <div className="flex items-center gap-1.5 text-text font-medium truncate">
+                  <FileCheck className="h-4 w-4 flex-shrink-0 text-text" />
                   <span className="truncate">{files.payments.name}</span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <div className="flex items-center justify-between text-[10px] text-text-secondary/60">
                   <span>{(files.payments.size / 1024).toFixed(1)} KB</span>
                   <button
                     type="button"
                     onClick={() => paymentsInputRef.current?.click()}
-                    className="text-emerald-600 hover:underline font-medium cursor-pointer"
+                    className="text-primary hover:underline font-medium cursor-pointer"
                   >
                     Replace
                   </button>
@@ -157,9 +157,9 @@ export default function DataSourcesSection({
               <button
                 type="button"
                 onClick={() => paymentsInputRef.current?.click()}
-                className="w-full py-2.5 bg-white border border-slate-200 hover:bg-slate-50 rounded-md text-xs font-medium text-slate-700 shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2.5 bg-background border border-border hover:bg-surface rounded-md text-xs font-medium text-text shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Upload className="h-3.5 w-3.5 text-slate-400" />
+                <Upload className="h-3.5 w-3.5 text-text-secondary/60" />
                 <span>payments.csv</span>
               </button>
             )}
@@ -170,18 +170,18 @@ export default function DataSourcesSection({
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => handleDrop('ledger', e)}
-          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors bg-slate-50/50 ${
-            files.ledger ? 'border-emerald-400 bg-emerald-50/20' : 'border-slate-300 hover:border-slate-400'
+          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors ${
+            files.ledger ? 'border-accent-green/40 bg-accent-green/10' : 'bg-surface border-border hover:border-text-secondary/60'
           }`}
         >
           <div>
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-semibold text-slate-900">2. LEDGER</span>
-              <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+              <span className="font-semibold text-text">2. LEDGER</span>
+              <span className="text-[10px] font-medium text-text bg-accent-green/10 border border-accent-green/30 px-1.5 py-0.5 rounded">
                 Required
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-[11px] text-text-secondary mb-3">
               ERP records (`transaction_id`, `gross_amount`, `fee`)
             </p>
           </div>
@@ -196,17 +196,17 @@ export default function DataSourcesSection({
             />
 
             {files.ledger ? (
-              <div className="bg-white border border-emerald-200 p-2.5 rounded-md text-xs space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-700 font-medium truncate">
-                  <FileCheck className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+              <div className="bg-background border border-accent-green/30 p-2.5 rounded-md text-xs space-y-1">
+                <div className="flex items-center gap-1.5 text-text font-medium truncate">
+                  <FileCheck className="h-4 w-4 flex-shrink-0 text-text" />
                   <span className="truncate">{files.ledger.name}</span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <div className="flex items-center justify-between text-[10px] text-text-secondary/60">
                   <span>{(files.ledger.size / 1024).toFixed(1)} KB</span>
                   <button
                     type="button"
                     onClick={() => ledgerInputRef.current?.click()}
-                    className="text-emerald-600 hover:underline font-medium cursor-pointer"
+                    className="text-primary hover:underline font-medium cursor-pointer"
                   >
                     Replace
                   </button>
@@ -216,9 +216,9 @@ export default function DataSourcesSection({
               <button
                 type="button"
                 onClick={() => ledgerInputRef.current?.click()}
-                className="w-full py-2.5 bg-white border border-slate-200 hover:bg-slate-50 rounded-md text-xs font-medium text-slate-700 shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2.5 bg-background border border-border hover:bg-surface rounded-md text-xs font-medium text-text shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Upload className="h-3.5 w-3.5 text-slate-400" />
+                <Upload className="h-3.5 w-3.5 text-text-secondary/60" />
                 <span>ledger.csv</span>
               </button>
             )}
@@ -229,18 +229,18 @@ export default function DataSourcesSection({
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => handleDrop('bank', e)}
-          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors bg-slate-50/50 ${
-            files.bank ? 'border-emerald-400 bg-emerald-50/20' : 'border-slate-300 hover:border-slate-400'
+          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors ${
+            files.bank ? 'border-accent-green/40 bg-accent-green/10' : 'bg-surface border-border hover:border-text-secondary/60'
           }`}
         >
           <div>
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-semibold text-slate-900">3. BANK</span>
-              <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+              <span className="font-semibold text-text">3. BANK</span>
+              <span className="text-[10px] font-medium text-text bg-accent-green/10 border border-accent-green/30 px-1.5 py-0.5 rounded">
                 Required
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-[11px] text-text-secondary mb-3">
               Settlements (`transaction_id`, `credited_amount`)
             </p>
           </div>
@@ -255,17 +255,17 @@ export default function DataSourcesSection({
             />
 
             {files.bank ? (
-              <div className="bg-white border border-emerald-200 p-2.5 rounded-md text-xs space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-700 font-medium truncate">
-                  <FileCheck className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+              <div className="bg-background border border-accent-green/30 p-2.5 rounded-md text-xs space-y-1">
+                <div className="flex items-center gap-1.5 text-text font-medium truncate">
+                  <FileCheck className="h-4 w-4 flex-shrink-0 text-text" />
                   <span className="truncate">{files.bank.name}</span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <div className="flex items-center justify-between text-[10px] text-text-secondary/60">
                   <span>{(files.bank.size / 1024).toFixed(1)} KB</span>
                   <button
                     type="button"
                     onClick={() => bankInputRef.current?.click()}
-                    className="text-emerald-600 hover:underline font-medium cursor-pointer"
+                    className="text-primary hover:underline font-medium cursor-pointer"
                   >
                     Replace
                   </button>
@@ -275,9 +275,9 @@ export default function DataSourcesSection({
               <button
                 type="button"
                 onClick={() => bankInputRef.current?.click()}
-                className="w-full py-2.5 bg-white border border-slate-200 hover:bg-slate-50 rounded-md text-xs font-medium text-slate-700 shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2.5 bg-background border border-border hover:bg-surface rounded-md text-xs font-medium text-text shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Upload className="h-3.5 w-3.5 text-slate-400" />
+                <Upload className="h-3.5 w-3.5 text-text-secondary/60" />
                 <span>bank.csv</span>
               </button>
             )}
@@ -288,18 +288,18 @@ export default function DataSourcesSection({
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => handleDrop('adjustments', e)}
-          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors bg-slate-50/50 ${
-            files.adjustments ? 'border-emerald-400 bg-emerald-50/20' : 'border-slate-300 hover:border-slate-400'
+          className={`border-2 border-dashed rounded-lg p-4 flex flex-col justify-between transition-colors ${
+            files.adjustments ? 'border-accent-green/40 bg-accent-green/10' : 'bg-surface border-border hover:border-text-secondary/60'
           }`}
         >
           <div>
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-semibold text-slate-900">4. ADJUSTMENTS</span>
-              <span className="text-[10px] font-medium text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+              <span className="font-semibold text-text">4. ADJUSTMENTS</span>
+              <span className="text-[10px] font-medium text-text-secondary bg-surface-alt border border-border px-1.5 py-0.5 rounded">
                 Optional
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-[11px] text-text-secondary mb-3">
               Fee tickets (`transaction_id`, `adjustment_type`, `amount`)
             </p>
           </div>
@@ -314,17 +314,17 @@ export default function DataSourcesSection({
             />
 
             {files.adjustments ? (
-              <div className="bg-white border border-emerald-200 p-2.5 rounded-md text-xs space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-700 font-medium truncate">
-                  <FileCheck className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+              <div className="bg-background border border-accent-green/30 p-2.5 rounded-md text-xs space-y-1">
+                <div className="flex items-center gap-1.5 text-text font-medium truncate">
+                  <FileCheck className="h-4 w-4 flex-shrink-0 text-text" />
                   <span className="truncate">{files.adjustments.name}</span>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <div className="flex items-center justify-between text-[10px] text-text-secondary/60">
                   <span>{(files.adjustments.size / 1024).toFixed(1)} KB</span>
                   <button
                     type="button"
                     onClick={() => adjustmentsInputRef.current?.click()}
-                    className="text-emerald-600 hover:underline font-medium cursor-pointer"
+                    className="text-primary hover:underline font-medium cursor-pointer"
                   >
                     Replace
                   </button>
@@ -334,9 +334,9 @@ export default function DataSourcesSection({
               <button
                 type="button"
                 onClick={() => adjustmentsInputRef.current?.click()}
-                className="w-full py-2.5 bg-white border border-slate-200 hover:bg-slate-50 rounded-md text-xs font-medium text-slate-700 shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2.5 bg-background border border-border hover:bg-surface rounded-md text-xs font-medium text-text shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Upload className="h-3.5 w-3.5 text-slate-400" />
+                <Upload className="h-3.5 w-3.5 text-text-secondary/60" />
                 <span>adjustments.csv</span>
               </button>
             )}
@@ -347,12 +347,12 @@ export default function DataSourcesSection({
 
       {/* Dataset Validation Summary Banner */}
       {validationStatus && (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-2">
+        <div className="bg-surface border border-border rounded-lg p-4 space-y-2">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-900">Dataset Validation Summary</span>
+            <span className="font-semibold text-text">Dataset Validation Summary</span>
             <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${
               validationStatus.valid
-                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                ? 'bg-accent-green/10 text-text border border-accent-green/30'
                 : 'bg-rose-100 text-rose-800 border border-rose-200'
             }`}>
               {validationStatus.valid ? '✓ Dataset Valid & Ready for Reconciliation' : '! Validation Errors Found'}
@@ -360,27 +360,27 @@ export default function DataSourcesSection({
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono pt-1">
-            <div className="bg-white p-2 rounded border border-slate-200">
-              <span className="text-slate-500 text-[11px] block">Payments</span>
-              <span className="font-bold text-slate-900">
+            <div className="bg-background p-2 rounded border border-border">
+              <span className="text-text-secondary/60 text-[11px] block">Payments</span>
+              <span className="font-bold text-text">
                 {validationStatus.sources?.payments?.records ?? 0} records
               </span>
             </div>
-            <div className="bg-white p-2 rounded border border-slate-200">
-              <span className="text-slate-500 text-[11px] block">Ledger</span>
-              <span className="font-bold text-slate-900">
+            <div className="bg-background p-2 rounded border border-border">
+              <span className="text-text-secondary/60 text-[11px] block">Ledger</span>
+              <span className="font-bold text-text">
                 {validationStatus.sources?.ledger?.records ?? 0} records
               </span>
             </div>
-            <div className="bg-white p-2 rounded border border-slate-200">
-              <span className="text-slate-500 text-[11px] block">Bank</span>
-              <span className="font-bold text-slate-900">
+            <div className="bg-background p-2 rounded border border-border">
+              <span className="text-text-secondary/60 text-[11px] block">Bank</span>
+              <span className="font-bold text-text">
                 {validationStatus.sources?.bank?.records ?? 0} records
               </span>
             </div>
-            <div className="bg-white p-2 rounded border border-slate-200">
-              <span className="text-slate-500 text-[11px] block">Adjustments</span>
-              <span className="font-bold text-slate-900">
+            <div className="bg-background p-2 rounded border border-border">
+              <span className="text-text-secondary/60 text-[11px] block">Adjustments</span>
+              <span className="font-bold text-text">
                 {validationStatus.sources?.adjustments?.records ?? 0} records
               </span>
             </div>
@@ -389,9 +389,9 @@ export default function DataSourcesSection({
       )}
 
       {/* Target User Flow Action Row: [ Validate Dataset ] [ Run Reconciliation ] */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-100">
-        <div className="text-xs text-slate-500 flex items-center gap-1.5">
-          <Info className="h-4 w-4 text-slate-400" />
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-border">
+        <div className="text-xs text-text-secondary flex items-center gap-1.5">
+          <Info className="h-4 w-4 text-text-secondary/60" />
           <span>Clicking <strong>Run Reconciliation</strong> automatically executes Phase 1 & parallel AI batch investigation.</span>
         </div>
 
@@ -400,7 +400,7 @@ export default function DataSourcesSection({
             type="button"
             onClick={handleValidate}
             disabled={!allRequiredPresent || validating}
-            className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2 bg-background border border-border hover:bg-surface text-text text-xs font-semibold rounded-lg shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
           >
             {validating ? 'Validating...' : 'Validate Dataset'}
           </button>
@@ -409,7 +409,7 @@ export default function DataSourcesSection({
             type="button"
             onClick={onRunReconciliation}
             disabled={isRunning}
-            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+            className="px-5 py-2 bg-primary hover:bg-primary-light text-white text-xs font-semibold rounded-lg shadow-xs transition-colors disabled:opacity-50 flex items-center gap-2 cursor-pointer"
           >
             <Play className="h-3.5 w-3.5 fill-current" />
             <span>{isRunning ? 'Reconciling...' : 'Run Reconciliation'}</span>

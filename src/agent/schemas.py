@@ -223,4 +223,11 @@ class BatchStatus(BaseModel):
     exception_type_counts: Dict[str, int] = Field(default_factory=dict)
 
 
+class BatchInvestigatorResponse(BaseModel):
+    """Structured response container for multiple transaction investigation proposals."""
+    proposals: List[InvestigationProposal]
 
+
+class BatchVerifierResponse(BaseModel):
+    """Structured response container for multiple transaction verification results."""
+    verifications: List[VerificationResult]

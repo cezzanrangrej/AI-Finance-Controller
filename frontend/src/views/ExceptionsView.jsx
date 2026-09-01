@@ -1,13 +1,13 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Bot, ShieldAlert, ArrowUpRight, Search, Filter } from 'lucide-react';
 
-export default function ExceptionsView({ exceptions, onSelectException }) {
+export default function ExceptionsView({ exceptions, onSelectTransaction }) {
   const [filterType, setFilterType] = useState('ALL'); // ALL, HUMAN_REVIEW, AUTO_RESOLVED
   const [search, setSearch] = useState('');
 
   if (!exceptions) {
     return (
-      <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-400 text-xs">
+      <div className="bg-background rounded-lg border border-border p-8 text-center text-text-secondary/60 text-xs">
         No exception data loaded.
       </div>
     );
@@ -32,23 +32,23 @@ export default function ExceptionsView({ exceptions, onSelectException }) {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-4">
+      <div className="bg-background rounded-lg border border-border p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-border gap-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Exception Triage & Investigation Queue</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <h2 className="text-base font-semibold text-text">Exception Triage & Investigation Queue</h2>
+            <p className="text-xs text-text-secondary mt-0.5">
               Review cases requiring finance ops attention and inspect deterministic proof on auto-resolved exceptions.
             </p>
           </div>
 
           <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-text-secondary/60" />
             <input
               type="text"
               placeholder="Search exception..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+              className="w-full bg-surface border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-text placeholder-text-secondary/60 outline-none focus:border-primary focus:bg-background transition-colors"
             />
           </div>
         </div>
@@ -59,28 +59,28 @@ export default function ExceptionsView({ exceptions, onSelectException }) {
             onClick={() => setFilterType('ALL')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
               filterType === 'ALL'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                ? 'bg-primary text-white shadow-xs font-semibold'
+                : 'bg-surface-alt text-text-secondary hover:text-text'
             }`}
           >
             All Exceptions ({exceptions.length})
           </button>
           <button
             onClick={() => setFilterType('HUMAN_REVIEW')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
               filterType === 'HUMAN_REVIEW'
-                ? 'bg-amber-600 text-white shadow-xs font-semibold'
-                : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                ? 'bg-accent-coral text-text shadow-xs font-semibold border-accent-coral'
+                : 'bg-accent-coral/10 text-text hover:bg-accent-coral/20 border-accent-coral/30'
             }`}
           >
             Needs Human Review ({humanReviewCount})
           </button>
           <button
             onClick={() => setFilterType('AUTO_RESOLVED')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
               filterType === 'AUTO_RESOLVED'
-                ? 'bg-emerald-600 text-white shadow-xs font-semibold'
-                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                ? 'bg-accent-green text-text shadow-xs font-semibold border-accent-green'
+                : 'bg-accent-green/10 text-text hover:bg-accent-green/20 border-accent-green/30'
             }`}
           >
             Auto-Resolved ({autoResolvedCount})
@@ -95,34 +95,34 @@ export default function ExceptionsView({ exceptions, onSelectException }) {
           return (
             <div
               key={item.transaction_id}
-              onClick={() => onSelectException(item.transaction_id)}
-              className="bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-5 shadow-xs cursor-pointer transition-all flex flex-col justify-between group"
+              onClick={() => onSelectTransaction && onSelectTransaction(item.transaction_id)}
+              className="bg-background border border-border hover:border-border rounded-lg p-5 shadow-xs cursor-pointer transition-all flex flex-col justify-between group"
             >
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-xs text-slate-900 group-hover:text-emerald-600 transition-colors">
+                  <span className="font-mono font-bold text-xs text-text group-hover:text-primary transition-colors">
                     {item.transaction_id}
                   </span>
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${
                     isResolved
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      ? 'bg-accent-green/10 text-text border-accent-green/30'
+                      : 'bg-accent-coral/10 text-text border-accent-coral/30'
                   }`}>
-                    {isResolved ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                    {isResolved ? <CheckCircle2 className="h-3 w-3 text-text" /> : <AlertTriangle className="h-3 w-3 text-accent-coral" />}
                     {item.decision}
                   </span>
                 </div>
 
-                <div className="text-[11px] font-mono text-slate-500 mt-1">
+                <div className="text-[11px] font-mono text-text-secondary mt-1">
                   {item.exception_type}
                 </div>
 
-                <p className="text-xs text-slate-600 mt-2.5 line-clamp-3 leading-relaxed">
+                <p className="text-xs text-text-secondary mt-2.5 line-clamp-3 leading-relaxed">
                   {item.reason}
                 </p>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-medium text-slate-700 group-hover:text-emerald-600">
+              <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs font-medium text-text group-hover:text-primary">
                 <span>View Full Audit Snapshot</span>
                 <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </div>
