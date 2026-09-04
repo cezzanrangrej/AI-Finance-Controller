@@ -10,39 +10,64 @@ It combines a high-throughput, deterministic Phase 1 reconciliation engine with 
 
 ## Architectural Pipeline
 
-```
-               +----------------------------------+
-               | Source Data Ingestion &          |
-               | Type-Safe Normalization          |
-               +----------------------------------+
-                                |
-                                v
-               +----------------------------------+
-               | Phase 1: Deterministic Engine     |
-               | - Multi-Key Hashing & Joins      |
-               | - Zero-Tolerance Fee Verification |
-               +----------------------------------+
-                                |
-                   +------------+------------+
-                   |                         |
-                   v                         v
-           [Reconciled 70%]          [Exceptions 30%]
-                   |                         |
-                   v                         v
-           [Saved to DB]             +----------------------------------+
-                                     | Phase 2: Parallel Batch          |
-                                     | Multi-Agent LLM Investigation    |
-                                     | - Investigator Agent             |
-                                     | - Verifier Agent                 |
-                                     +----------------------------------+
-                                               |
-                                   +-----------+-----------+
-                                   |                       |
-                                   v                       v
-                           [Auto-Resolved 20%]     [Human Review 10%]
-                                   |                       |
-                                   v                       v
-                           [Saved to DB]           [Saved to DB]
+```text
+                                  [Raw Financial Data Feeds]
+                              (Payments, Ledger, Bank Records)
+                                             │
+                                             ▼
+                             ┌────────────────────────────────┐
+                             │  Phase 1: Deterministic Engine │
+                             │   (ReconciliationEngine.py)    │
+                             │  - 6 Strict Rule Checkers      │
+                             │  - Python Decimal Precision    │
+                             └───────────────┬────────────────┘
+                                             │
+                       ┌─────────────────────┴─────────────────────┐
+                       ▼                                           ▼
+             [RECONCILED (95-98%)]                         [EXCEPTIONS (2-5%)]
+           (Zero LLM Cost, Instant)                                │
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │ Balanced Batch Partitioner    │
+                                                   │    (batch_partitioner.py)     │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │ Parallel Batch Async Engine   │
+                                                   │   (asyncio.Semaphore Worker)  │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                    ┌──────────────────────────────┴──────────────────────────────┐
+                                    ▼                                                             ▼
+                    ┌───────────────────────────────┐                             ┌───────────────────────────────┐
+                    │      Investigator Agent       │                             │      Authoritative Proof      │
+                    │      (Maker / Proposer)       │                             │     (Python Decimal Check)    │
+                    │ - Read-Only Financial Toolkit │                             │ - Mathematical Proof Gate     │
+                    │ - Gathers Facts & Hypothesis  │                             └───────────────┬───────────────┘
+                    └───────────────┬───────────────┘                                             │
+                                    │                                                             │
+                                    ▼                                                             │
+                    ┌───────────────────────────────┐                                             │
+                    │        Verifier Agent         │                                             │
+                    │      (Checker / Auditor)      │                                             │
+                    │ - Conservative Review         │                                             │
+                    │ - Tests Evidence & Conflicts  │                                             │
+                    └───────────────┬───────────────┘                                             │
+                                    │                                                             │
+                                    └──────────────────────────────┬──────────────────────────────┘
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │  Consensus & Safety Policy    │
+                                                   │ (AUTO_RESOLVED vs HUMAN_REV)  │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                       ┌───────────────────────────┴───────────────────────────┐
+                                       ▼                                                       ▼
+                            ┌─────────────────────┐                                 ┌─────────────────────┐
+                            │    FastAPI & DB     │                                 │   Next.js / React   │
+                            │  Audit Trails & SSE │◄────────────────────────────────┤ Real-Time Dashboard │
+                            └─────────────────────┘                                 └─────────────────────┘
 ```
 
 ---

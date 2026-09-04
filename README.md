@@ -21,62 +21,63 @@ Traditional financial operations face two critical failure modes:
 The system operates as a two-phase pipeline with strict separation between deterministic accounting and AI-driven reasoning:
 
 ```text
-Financial CSV Sources (Payments, ERP Ledger, Bank Statements, Adjustments)
-                            │
-                            ▼
-        ┌──────────────────────────────────────────┐
-        │ Canonical Data Normalization Layer       │
-        │ (Decimal precision & schema invariants)  │
-        └───────────────────┬──────────────────────┘
-                            │
-                            ▼
-        ┌──────────────────────────────────────────┐
-        │ Phase 1: Deterministic Engine (Python)   │
-        │ (~5ms / 100 records · 6 accounting checks│
-        └───────────┬──────────────────┬───────────┘
-                    │                  │
-                    ▼                  ▼
-             RECONCILED           EXCEPTIONS
-          (Passed Invariants)   (Discrepancies)
-                                       │
-                                       ▼
-        ┌──────────────────────────────────────────┐
-        │ Balanced Batch Scheduler & Concurrency   │
-        │ (5-case diversified batches · Pool ≤ 5)  │
-        └───────────────────┬──────────────────────┘
-                            │
-                            ▼
-        ┌──────────────────────────────────────────┐
-        │ Phase 2: AI Multi-Agent Investigation    │
-        │ ┌──────────────────────────────────────┐ │
-        │ │ Investigator Agent                   │ │
-        │ │ Correlates evidence & proposes fix   │ │
-        │ └──────────────────┬───────────────────┘ │
-        │                    │                     │
-        │                    ▼                     │
-        │ ┌──────────────────────────────────────┐ │
-        │ │ Deterministic Proof Engine (Python)  │ │
-        │ │ Validates math & adjustment evidence │ │
-        │ └──────────────────┬───────────────────┘ │
-        │                    │                     │
-        │                    ▼                     │
-        │ ┌──────────────────────────────────────┐ │
-        │ │ Verifier Agent                       │ │
-        │ │ Independently critiques proposal     │ │
-        │ └──────────────────────────────────────┘ │
-        └───────────────────┬──────────────────────┘
-                            │
-                            ▼
-        ┌──────────────────────────────────────────┐
-        │ Decision & Escalation Policy             │
-        │ AUTO_RESOLVED  or  HUMAN_REVIEW          │
-        └───────────────────┬──────────────────────┘
-                            │
-                            ▼
-        ┌──────────────────────────────────────────┐
-        │ Live SSE Stream & SQLite Persistence     │
-        │ (Real-time updates to React Operations)  │
-        └──────────────────────────────────────────┘
+                                  [Raw Financial Data Feeds]
+                              (Payments, Ledger, Bank Records)
+                                             │
+                                             ▼
+                             ┌────────────────────────────────┐
+                             │  Phase 1: Deterministic Engine │
+                             │   (ReconciliationEngine.py)    │
+                             │  - 6 Strict Rule Checkers      │
+                             │  - Python Decimal Precision    │
+                             └───────────────┬────────────────┘
+                                             │
+                       ┌─────────────────────┴─────────────────────┐
+                       ▼                                           ▼
+             [RECONCILED (95-98%)]                         [EXCEPTIONS (2-5%)]
+           (Zero LLM Cost, Instant)                                │
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │ Balanced Batch Partitioner    │
+                                                   │    (batch_partitioner.py)     │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │ Parallel Batch Async Engine   │
+                                                   │   (asyncio.Semaphore Worker)  │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                    ┌──────────────────────────────┴──────────────────────────────┐
+                                    ▼                                                             ▼
+                    ┌───────────────────────────────┐                             ┌───────────────────────────────┐
+                    │      Investigator Agent       │                             │      Authoritative Proof      │
+                    │      (Maker / Proposer)       │                             │     (Python Decimal Check)    │
+                    │ - Read-Only Financial Toolkit │                             │ - Mathematical Proof Gate     │
+                    │ - Gathers Facts & Hypothesis  │                             └───────────────┬───────────────┘
+                    └───────────────┬───────────────┘                                             │
+                                    │                                                             │
+                                    ▼                                                             │
+                    ┌───────────────────────────────┐                                             │
+                    │        Verifier Agent         │                                             │
+                    │      (Checker / Auditor)      │                                             │
+                    │ - Conservative Review         │                                             │
+                    │ - Tests Evidence & Conflicts  │                                             │
+                    └───────────────┬───────────────┘                                             │
+                                    │                                                             │
+                                    └──────────────────────────────┬──────────────────────────────┘
+                                                                   ▼
+                                                   ┌───────────────────────────────┐
+                                                   │  Consensus & Safety Policy    │
+                                                   │ (AUTO_RESOLVED vs HUMAN_REV)  │
+                                                   └───────────────┬───────────────┘
+                                                                   │
+                                       ┌───────────────────────────┴───────────────────────────┐
+                                       ▼                                                       ▼
+                            ┌─────────────────────┐                                 ┌─────────────────────┐
+                            │    FastAPI & DB     │                                 │   Next.js / React   │
+                            │  Audit Trails & SSE │◄────────────────────────────────┤ Real-Time Dashboard │
+                            └─────────────────────┘                                 └─────────────────────┘
 ```
 
 ### Pipeline Flow
