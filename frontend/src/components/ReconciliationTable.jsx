@@ -70,7 +70,7 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
       // Tab filter
       if (activeTab === 'RECONCILED' && item.status !== 'RECONCILED') return false;
       if (activeTab === 'AUTO_RESOLVED' && item.decision !== 'AUTO_RESOLVED') return false;
-      if (activeTab === 'HUMAN_REVIEW' && item.decision !== 'HUMAN_REVIEW') return false;
+      if (activeTab === 'HUMAN_REVIEW' && !(item.decision === 'HUMAN_REVIEW' || item.decision === 'NOT_EVALUATED')) return false;
 
       // Category filter
       if (categoryFilter !== 'ALL' && item.exception_type !== categoryFilter) return false;
@@ -104,7 +104,7 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
     { key: 'ALL', label: 'All Transactions', count: unifiedItems.length },
     { key: 'RECONCILED', label: 'Reconciled', count: unifiedItems.filter((i) => i.status === 'RECONCILED').length },
     { key: 'AUTO_RESOLVED', label: 'Auto-Resolved', count: unifiedItems.filter((i) => i.decision === 'AUTO_RESOLVED').length },
-    { key: 'HUMAN_REVIEW', label: 'Needs Attention', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW').length },
+    { key: 'HUMAN_REVIEW', label: 'Needs Attention', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW' || i.decision === 'NOT_EVALUATED').length },
   ];
 
   const handleDownloadCSV = () => {

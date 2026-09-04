@@ -67,6 +67,9 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
       formData.append('ledger', files.ledger);
       formData.append('bank', files.bank);
       if (files.adjustments) formData.append('adjustments', files.adjustments);
+      // Optional. Present, the backend scores the run against it; absent, every
+      // accuracy field is persisted as NULL and renders as N/A rather than 100%.
+      if (files.groundTruth) formData.append('ground_truth', files.groundTruth);
       if (settings?.provider) formData.append('provider', settings.provider);
       if (settings?.batchSize) formData.append('batch_size', String(settings.batchSize));
 

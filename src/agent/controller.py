@@ -51,6 +51,7 @@ class DemoLLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
     ) -> Any:
         """Executes deterministic Demo Mode chat."""
         return self._demo_chat(messages, tools)
@@ -456,6 +457,7 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
     ) -> Any:
         """Interface method declaration for type hinting and mocking."""
         pass
@@ -535,6 +537,39 @@ class LLMClient:
             client.provider_name = "grok"
             return client
 
+        elif selected_provider == "agentrouter":
+            # AgentRouter is an OpenAI-compatible gateway (https://agentrouter.org/v1).
+            # It uses the same wire format as OpenRouter, so we reuse OpenRouterLLMClient
+            # but point base_url at AgentRouter and pull agentrouter-specific credentials.
+            ar_key = (
+                api_key
+                or os.getenv("AGENTROUTER_API_KEY")
+                or os.getenv("INVESTIGATOR_API_KEY")
+                or os.getenv("VERIFIER_API_KEY")
+                or ""
+            ).strip()
+            if not ar_key:
+                raise ValueError(
+                    "AgentRouter API key is missing. "
+                    "Set AGENTROUTER_API_KEY (or INVESTIGATOR_API_KEY / VERIFIER_API_KEY) "
+                    "in environment or configure provider=demo for Demo Mode."
+                )
+            ar_model = (model or os.getenv("AGENTROUTER_MODEL") or "").strip()
+            if not ar_model:
+                raise ValueError(
+                    "AgentRouter model is missing. "
+                    "Pass a model or set AGENTROUTER_MODEL (e.g. AGENTROUTER_MODEL=claude-opus-4-8)."
+                )
+            validate_model_not_key("agentrouter", ar_model)
+
+            ar_base = (os.getenv("AGENTROUTER_BASE_URL") or "https://agentrouter.org/v1").strip()
+
+            from src.agent.openrouter_client import OpenRouterLLMClient
+            client = OpenRouterLLMClient(api_key=ar_key, model=ar_model, base_url=ar_base)
+            client.provider = "agentrouter"
+            client.provider_name = "agentrouter"
+            return client
+
         elif selected_provider == "demo":
             client = DemoLLMClient(model=model or "demo")
             client.provider_name = "demo"
@@ -542,7 +577,7 @@ class LLMClient:
 
         else:
             raise ValueError(
-                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', 'openrouter', or 'grok'."
+                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', 'openrouter', 'agentrouter', or 'grok'."
             )
 
 
@@ -560,6 +595,9 @@ class EvidenceState:
         self.expected_settlement: Optional[Dict[str, Any]] = None
         self.adjusted_expected_settlement: Optional[Dict[str, Any]] = None
         self.duplicate_check: Optional[Dict[str, Any]] = None
+        self.discrepancy_verification: Optional[Dict[str, Any]] = None
+        self.record_presence: Optional[Dict[str, Any]] = None
+        self.date_consistency: Optional[Dict[str, Any]] = None
 
     def update(self, tool_name: str, result: Any) -> None:
         if not isinstance(result, dict) or "error" in result:
@@ -598,6 +636,15 @@ class EvidenceState:
         elif tool_name == "check_for_duplicates":
             self.duplicate_check = result
 
+        elif tool_name == "verify_discrepancy":
+            self.discrepancy_verification = result
+
+        elif tool_name == "check_record_presence":
+            self.record_presence = result
+
+        elif tool_name == "check_date_consistency":
+            self.date_consistency = result
+
 
 def has_sufficient_resolution_evidence(
     state: EvidenceState,
@@ -607,6 +654,15 @@ def has_sufficient_resolution_evidence(
     Deterministically evaluates whether the collected evidence objectively proves
     an AUTO_RESOLVED decision without needing further tool calls.
     """
+    # Fast path: deterministic discrepancy verification tool proves explanation
+    if state.discrepancy_verification and state.discrepancy_verification.get("discrepancy_fully_explained"):
+        return True, {
+            "resolution_type": "ADJUSTMENT_EXPLAINED",
+            "resolved_difference": state.discrepancy_verification.get("resolved_difference"),
+            "reason": state.discrepancy_verification.get("explanation"),
+            "calculation": state.discrepancy_verification.get("explanation"),
+        }
+
     # 1. Contradictory evidence check: multiple bank records require HUMAN_REVIEW
     if state.duplicate_check and state.duplicate_check.get("is_duplicate"):
         return False, None

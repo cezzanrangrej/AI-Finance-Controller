@@ -68,7 +68,7 @@ class VerifierAgent:
 
         self.last_successful_calls = 0
         try:
-            response = self.llm.chat(messages=messages)
+            response = self.llm.chat(messages=messages, max_tokens=250)
             choice = response.choices[0]
             content = choice.message.content or ""
             res = self._parse_verification(content, txn_id, proposal)

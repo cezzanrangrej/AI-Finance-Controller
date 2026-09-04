@@ -283,11 +283,92 @@ def test_batch_processes_and_computes_precision_recall(tmp_path):
     assert human_review_count > 0
     assert auto_resolved_count + human_review_count == 30
 
-    eval_metrics = evaluate_agent_decisions(decisions, ground_truth)
+    # phase1_results must be supplied for Phase 1 to be *measured* rather than
+    # assumed. Without it phase1_accuracy is None ("not measured") by design.
+    eval_metrics = evaluate_agent_decisions(decisions, ground_truth, phase1_results=p1_results)
     assert eval_metrics.phase1_accuracy == 100.0
     assert eval_metrics.phase2_decision_accuracy == 100.0
     assert eval_metrics.auto_resolution_precision == 100.0
     assert eval_metrics.auto_resolution_recall == 100.0
+
+    # The 100% above is now backed by a confusion matrix over every labelled
+    # record, not by a hardcoded constant.
+    assert eval_metrics.phase1_labelled_records == 100
+    assert eval_metrics.phase1_true_positives == 30
+    assert eval_metrics.phase1_false_positives == 0
+    assert eval_metrics.phase1_false_negatives == 0
+    assert eval_metrics.phase1_detection_precision == 100.0
+    assert eval_metrics.phase1_detection_recall == 100.0
+
+
+def test_phase1_accuracy_is_none_without_phase1_results():
+    """Phase 1 accuracy is unmeasured, not 100%, when no Phase 1 rows are given."""
+    from src.agent.schemas import AgentDecision
+
+    decisions = [
+        AgentDecision(
+            transaction_id="TXN001",
+            decision="HUMAN_REVIEW",
+            exception_type="BANK_AMOUNT_MISMATCH",
+            resolution_type="NONE",
+            reason="r",
+            evidence=["Phase 1 exception: BANK_AMOUNT_MISMATCH"],
+            confidence=0.5,
+            recommended_action="a",
+        )
+    ]
+    ground_truth = [{"transaction_id": "TXN001", "expected_phase2_decision": "HUMAN_REVIEW"}]
+
+    metrics = evaluate_agent_decisions(decisions, ground_truth)
+    assert metrics.phase1_accuracy is None
+    assert metrics.phase1_detection_precision is None
+    assert metrics.phase1_detection_recall is None
+    # Phase 2 was measurable, so it is a real number.
+    assert metrics.phase2_decision_accuracy == 100.0
+    # No auto-resolutions were made and none were expected: unmeasured, not perfect.
+    assert metrics.auto_resolution_precision is None
+    assert metrics.auto_resolution_recall is None
+
+
+def test_phase1_detection_metrics_catch_false_positives_and_negatives():
+    """A rule engine that mislabels records is scored as such, not assumed correct."""
+    from src.agent.evaluator import compute_phase1_detection_metrics
+
+    phase1_results = [
+        {"transaction_id": "T1", "status": "EXCEPTION"},    # true positive
+        {"transaction_id": "T2", "status": "EXCEPTION"},    # false positive
+        {"transaction_id": "T3", "status": "RECONCILED"},   # false negative
+        {"transaction_id": "T4", "status": "RECONCILED"},   # true negative
+    ]
+    ground_truth = [
+        {"transaction_id": "T1", "is_phase1_exception": True},
+        {"transaction_id": "T2", "is_phase1_exception": False},
+        {"transaction_id": "T3", "is_phase1_exception": True},
+        {"transaction_id": "T4", "is_phase1_exception": False},
+    ]
+
+    m = compute_phase1_detection_metrics(phase1_results, ground_truth)
+    assert m["phase1_true_positives"] == 1
+    assert m["phase1_false_positives"] == 1
+    assert m["phase1_false_negatives"] == 1
+    assert m["phase1_labelled_records"] == 4
+    assert m["phase1_accuracy"] == 50.0
+    assert m["phase1_detection_precision"] == 50.0
+    assert m["phase1_detection_recall"] == 50.0
+
+    # The generator's `expected_phase1_status` spelling must score identically.
+    gt_alt = [
+        {"transaction_id": "T1", "expected_phase1_status": "EXCEPTION"},
+        {"transaction_id": "T2", "expected_phase1_status": "RECONCILED"},
+        {"transaction_id": "T3", "expected_phase1_status": "EXCEPTION"},
+        {"transaction_id": "T4", "expected_phase1_status": "RECONCILED"},
+    ]
+    assert compute_phase1_detection_metrics(phase1_results, gt_alt) == m
+
+    # Unlabelled rows are excluded from the denominator, not counted as clean.
+    unlabelled = compute_phase1_detection_metrics(phase1_results, [{"transaction_id": "T1"}])
+    assert unlabelled["phase1_labelled_records"] == 0
+    assert unlabelled["phase1_accuracy"] is None
 
 
 # ----------------------------------------------------------------------

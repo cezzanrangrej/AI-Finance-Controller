@@ -11,6 +11,7 @@ Executes unified Phase 2 reconciliation:
 
 from datetime import datetime, timezone
 import json
+import logging
 import os
 import re
 import time
@@ -26,6 +27,12 @@ from src.agent.controller import (
     has_sufficient_resolution_evidence,
 )
 from src.agent.multi_agent.orchestrator import MultiAgentOrchestrator
+from src.agent.provider_resolution import (
+    ProviderResolution,
+    build_role_clients,
+    format_resolution_banner,
+    resolve_providers,
+)
 from src.agent.prompts import (
     BATCH_INVESTIGATOR_SYSTEM_PROMPT,
     BATCH_VERIFIER_SYSTEM_PROMPT,
@@ -44,6 +51,8 @@ from src.agent.schemas import (
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
 
+logger = logging.getLogger(__name__)
+
 
 class BatchMultiAgentController:
     """
@@ -59,70 +68,32 @@ class BatchMultiAgentController:
         investigator_model: Optional[str] = None,
         verifier_model: Optional[str] = None,
         tracer: Optional[AgentTracer] = None,
+        resolution: Optional[ProviderResolution] = None,
     ) -> None:
         self.toolkit = toolkit
         self.tracer = tracer or default_tracer
-        self.provider = (provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
         self.api_key = api_key
 
-        # Resolve role providers
-        if self.provider == "demo":
-            inv_provider = "demo"
-            ver_provider = "demo"
-        else:
-            inv_provider = (os.getenv("INVESTIGATOR_PROVIDER") or self.provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
-            ver_provider = (os.getenv("VERIFIER_PROVIDER") or self.provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
-
-        # Resolve Investigator role configuration
-        inv_key = (os.getenv("INVESTIGATOR_API_KEY") or (api_key if inv_provider == self.provider else None) or "").strip()
-        if not inv_key:
-            if inv_provider == "grok":
-                inv_key = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
-            elif inv_provider == "gemini":
-                inv_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-            elif inv_provider == "openrouter":
-                inv_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-
-        inv_model = (investigator_model or os.getenv("INVESTIGATOR_MODEL") or "").strip()
-        if not inv_model:
-            if inv_provider == "grok":
-                inv_model = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-beta").strip()
-            elif inv_provider == "gemini":
-                inv_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            elif inv_provider == "openrouter":
-                inv_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
-            elif inv_provider == "demo":
-                inv_model = "demo"
-
-        # Resolve Verifier role configuration
-        ver_key = (os.getenv("VERIFIER_API_KEY") or (api_key if ver_provider == self.provider else None) or "").strip()
-        if not ver_key:
-            if ver_provider == "gemini":
-                ver_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-            elif ver_provider == "grok":
-                ver_key = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
-            elif ver_provider == "openrouter":
-                ver_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-
-        ver_model = (verifier_model or os.getenv("VERIFIER_MODEL") or "").strip()
-        if not ver_model:
-            if ver_provider == "gemini":
-                ver_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            elif ver_provider == "grok":
-                ver_model = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-beta").strip()
-            elif ver_provider == "openrouter":
-                ver_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
-            elif ver_provider == "demo":
-                ver_model = "demo"
-
-        self.investigator_llm = LLMClient(provider=inv_provider, api_key=inv_key, model=inv_model)
-        self.verifier_llm = LLMClient(provider=ver_provider, api_key=ver_key, model=ver_model)
-        self.fallback_orchestrator = MultiAgentOrchestrator(
-            toolkit=toolkit,
+        # Roles resolve independently; LLM_PROVIDER is a fallback, not a gate.
+        # See src/agent/provider_resolution.py for why this is centralized.
+        self.resolution = resolution or resolve_providers(
             provider=provider,
             api_key=api_key,
-            investigator_model=inv_model,
-            verifier_model=ver_model,
+            investigator_model=investigator_model,
+            verifier_model=verifier_model,
+        )
+        self.provider = self.resolution.provider_label
+
+        logger.info("Batch multi-agent configuration:\n%s", format_resolution_banner(self.resolution))
+
+        self.investigator_llm, self.verifier_llm = build_role_clients(self.resolution, LLMClient)
+
+        # The single-case fallback path reuses the already-resolved configuration
+        # rather than re-deriving it, so a fallback can never land on a different
+        # provider than the batch that triggered it.
+        self.fallback_orchestrator = MultiAgentOrchestrator(
+            toolkit=toolkit,
+            resolution=self.resolution,
             tracer=self.tracer,
         )
 
@@ -156,9 +127,13 @@ class BatchMultiAgentController:
 
         proposals_map: Dict[str, Dict[str, Any]] = {}
         fallback_txns: List[str] = []
+        not_evaluated_txns: List[str] = []
+        batch_max_tokens = max(600, 400 * len(batch_exceptions))
 
+        inv_resp = None
+        inv_content = ""
         try:
-            inv_resp = self.investigator_llm.chat(messages=inv_messages)
+            inv_resp = self.investigator_llm.chat(messages=inv_messages, max_tokens=batch_max_tokens)
             inv_content = inv_resp.choices[0].message.content or ""
             cleaned_inv = self._clean_json(inv_content)
             parsed_inv = json.loads(cleaned_inv)
@@ -171,8 +146,18 @@ class BatchMultiAgentController:
                     if "decision" in p and "proposed_resolution" not in p:
                         p["proposed_resolution"] = p["decision"]
                     proposals_map[tid] = p
-        except Exception:
-            pass
+        except Exception as e:
+            finish_reason = getattr(inv_resp.choices[0], "finish_reason", None) if inv_resp and getattr(inv_resp, "choices", None) else None
+            completion_tokens = getattr(getattr(inv_resp, "usage", None), "completion_tokens", None) if inv_resp else None
+            logger.warning(
+                "Batch %s LLM call failed, activating fallback: %s | finish_reason=%s, length=%d chars, completion_tokens=%s | Snippet: %r",
+                "investigator",
+                e,
+                finish_reason,
+                len(inv_content),
+                completion_tokens,
+                inv_content[-200:] if inv_content else "",
+            )
 
         # Step 3: Verifier Agent Batch Execution
         proposals_list = [
@@ -190,8 +175,10 @@ class BatchMultiAgentController:
         ]
 
         verifications_map: Dict[str, Dict[str, Any]] = {}
+        ver_resp = None
+        ver_content = ""
         try:
-            ver_resp = self.verifier_llm.chat(messages=ver_messages)
+            ver_resp = self.verifier_llm.chat(messages=ver_messages, max_tokens=batch_max_tokens)
             ver_content = ver_resp.choices[0].message.content or ""
             cleaned_ver = self._clean_json(ver_content)
             parsed_ver = json.loads(cleaned_ver)
@@ -201,8 +188,18 @@ class BatchMultiAgentController:
                 tid = v.get("transaction_id")
                 if tid in expected_txn_ids:
                     verifications_map[tid] = v
-        except Exception:
-            pass
+        except Exception as e:
+            finish_reason = getattr(ver_resp.choices[0], "finish_reason", None) if ver_resp and getattr(ver_resp, "choices", None) else None
+            completion_tokens = getattr(getattr(ver_resp, "usage", None), "completion_tokens", None) if ver_resp else None
+            logger.warning(
+                "Batch %s LLM call failed, activating fallback: %s | finish_reason=%s, length=%d chars, completion_tokens=%s | Snippet: %r",
+                "verifier",
+                e,
+                finish_reason,
+                len(ver_content),
+                completion_tokens,
+                ver_content[-200:] if ver_content else "",
+            )
 
         # Step 4: Deterministic Proof Verification & Multi-Agent Consensus Resolution
         batch_decisions_map: Dict[str, AgentDecision] = {}
@@ -224,12 +221,20 @@ class BatchMultiAgentController:
             # Authoritative deterministic proof check
             is_proven, proof_data = has_sufficient_resolution_evidence(state, exc_type)
             if is_proven and proof_data:
-                batch_decisions_map[tid] = build_proven_adjustment_resolution(
+                proven = build_proven_adjustment_resolution(
                     txn_id=tid,
                     exception_type=exc_type,
                     evidence=[f"Phase 1 exception: {exc_type}"],
                     resolution_data=proof_data,
                 )
+                # No LLM decided this case -- a Decimal proof did. Record that
+                # honestly rather than crediting the agents with it.
+                proven.agent_mode = "BATCH_MULTI_AGENT"
+                proven.resolution_source = "DETERMINISTIC_PROOF"
+                proven.investigator_calls = 0
+                proven.verifier_calls = 0
+                proven.model_interactions = 0
+                batch_decisions_map[tid] = proven
                 continue
 
             # Multi-Agent Consensus Policy
@@ -242,16 +247,32 @@ class BatchMultiAgentController:
                 try:
                     fb_dec, _ = self.fallback_orchestrator.investigate_exception(exc_rec)
                     batch_decisions_map[tid] = fb_dec
-                except Exception:
+                except Exception as fb_err:
+                    # Both the batch call and the per-case fallback failed. This is an
+                    # infrastructure failure, not a judgment that a human should look
+                    # at the case -- label it NOT_EVALUATED so the exception report can
+                    # declare it honestly instead of hiding it among genuine
+                    # HUMAN_REVIEW escalations.
+                    logger.warning(
+                        "Case %s could not be evaluated (batch + fallback both failed): %s",
+                        tid,
+                        fb_err,
+                    )
+                    not_evaluated_txns.append(tid)
                     batch_decisions_map[tid] = AgentDecision(
                         transaction_id=tid,
-                        decision="HUMAN_REVIEW",
+                        decision="NOT_EVALUATED",
                         exception_type=exc_type,
                         resolution_type="NONE",
-                        reason="Multi-agent batch evaluation failed; escalated to human review.",
+                        reason=(
+                            "Agent could not evaluate this case: batch investigation and "
+                            f"per-case fallback both failed ({type(fb_err).__name__}). "
+                            "This is a system failure, not an assessment of the case."
+                        ),
                         evidence=[f"Phase 1 exception: {exc_type}"],
-                        confidence=0.5,
-                        recommended_action="Manual review required.",
+                        confidence=0.0,
+                        recommended_action="Re-run investigation; case has not been assessed.",
+                        resolution_source="INFRASTRUCTURE_FAILURE",
                     )
                 continue
 
@@ -267,6 +288,8 @@ class BatchMultiAgentController:
                 reason = inv_prop.get("reason", "Multi-agent consensus resolved discrepancy.")
                 action = inv_prop.get("recommended_action", "No action needed.")
                 confidence = min(inv_conf, ver_conf)
+                source = "MULTI_AGENT_CONSENSUS"
+                disagreement = False
             else:
                 final_decision = "HUMAN_REVIEW"
                 res_type = "NONE"
@@ -274,12 +297,18 @@ class BatchMultiAgentController:
                 if inv_decision == "AUTO_RESOLVED" and ver_decision == "HUMAN_REVIEW":
                     reason = f"Verifier escalated to human review: {ver_res.get('reason', 'Verification rejected')}"
                     confidence = ver_conf
+                    source = "VERIFIER_ESCALATION"
+                    disagreement = True
                 elif inv_decision == "HUMAN_REVIEW" and ver_decision == "AUTO_RESOLVED":
                     reason = "Disagreement safeguard: Investigator proposed human review."
                     confidence = 0.5
+                    source = "DISAGREEMENT_SAFEGUARD"
+                    disagreement = True
                 else:
                     reason = inv_prop.get("reason") or ver_res.get("reason") or "Discrepancy requires manual review."
                     confidence = max(inv_conf, ver_conf)
+                    source = "MULTI_AGENT_CONSENSUS"
+                    disagreement = False
                 action = inv_prop.get("recommended_action") or "Review discrepancy with operations team."
 
             ev_list = inv_prop.get("evidence") or [f"Phase 1 exception: {exc_type}"]
@@ -293,6 +322,14 @@ class BatchMultiAgentController:
                 evidence=ev_list,
                 confidence=max(0.0, min(1.0, confidence)),
                 recommended_action=action,
+                agent_mode="BATCH_MULTI_AGENT",
+                resolution_source=source,
+                investigator_proposal=inv_prop,
+                verification_result=ver_res,
+                disagreement_detected=disagreement,
+                investigator_calls=1,
+                verifier_calls=1,
+                model_interactions=2,
             )
 
         perf_end = time.perf_counter()
@@ -331,8 +368,11 @@ class BatchMultiAgentController:
             llm_interactions=2,
             fallback_count=len(fallback_txns),
             fallback_transaction_ids=fallback_txns,
+            not_evaluated_count=len(not_evaluated_txns),
+            not_evaluated_transaction_ids=not_evaluated_txns,
             decisions=ordered_decisions,
             case_count=len(batch_exceptions),
+            tool_provenance={c.transaction_id: list(c.tools_invoked) for c in prefetched_cases},
         )
 
         return ordered_decisions, log

@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 import os
 import queue
 import threading
@@ -12,10 +13,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from decimal import Decimal
-from src.agent.controller import AgentController, LLMClient
 from src.agent.evaluator import evaluate_agent_decisions
 from src.agent.schemas import AgentDecision
 from src.agent.tools import FinancialToolkit
+from src.agent.provider_resolution import ProviderResolution, resolve_providers
 from src.api.schemas import DataIntegrityDiagnosticResponse, DataIntegrityRecord, RunSummaryResponse
 from src.db.database import SessionLocal, get_db, init_db
 from src.db.repository import FinanceRepository
@@ -25,10 +26,131 @@ from src.config import settings
 from src.reporting.exception_report import build_exception_report, format_as_markdown
 from src.utils.formatters import safe_decimal, safe_numeric
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 # Active event queues for live streaming reconciliation runs
 _ACTIVE_RUN_STREAMS: Dict[str, queue.Queue] = {}
+
+
+def _resolve_investigation_providers(provider: Optional[str] = None) -> ProviderResolution:
+    """
+    Resolves per-role provider configuration for a multi-agent run.
+
+    Delegates to src.agent.provider_resolution so the API and the controllers
+    share one ladder. Previously each maintained its own, with different fallback
+    rules, and they could disagree about whether a run was live.
+
+    Roles degrade independently: a missing Verifier key no longer forces the
+    Investigator offline too.
+    """
+    return resolve_providers(provider=provider)
+
+
+def _multi_agent_token_totals(batch_agent: Any) -> Dict[str, Optional[int]]:
+    """Sums cumulative token usage across the Investigator and Verifier clients."""
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    for client in (getattr(batch_agent, "investigator_llm", None), getattr(batch_agent, "verifier_llm", None)):
+        if client is None:
+            continue
+        totals["prompt_tokens"] += getattr(client, "cumulative_prompt_tokens", 0) or 0
+        totals["completion_tokens"] += getattr(client, "cumulative_completion_tokens", 0) or 0
+        totals["total_tokens"] += getattr(client, "cumulative_total_tokens", 0) or 0
+    return totals
+
+
+def _multi_agent_run_metadata(batch_agent: Any) -> Dict[str, Any]:
+    """
+    Extracts provider/mode/model metadata from the constructed agent clients.
+
+    Reads the clients rather than the requested base provider because
+    INVESTIGATOR_PROVIDER / VERIFIER_PROVIDER can override it — recording the
+    base would misreport which API actually served the run.
+
+    ``llm_degraded`` records whether either role silently fell back to the demo
+    engine, so a persisted run carries the evidence that its decisions came from
+    the offline emulator rather than a real model.
+    """
+    inv = getattr(batch_agent, "investigator_llm", None)
+    ver = getattr(batch_agent, "verifier_llm", None)
+
+    inv_provider = getattr(inv, "provider", None) or getattr(batch_agent, "provider", "demo")
+    ver_provider = getattr(ver, "provider", None) or inv_provider
+
+    provider_name = inv_provider if inv_provider == ver_provider else f"{inv_provider}+{ver_provider}"
+
+    resolution = getattr(batch_agent, "resolution", None)
+    degraded = bool(getattr(resolution, "degraded", False))
+    degraded_reason = "; ".join(getattr(resolution, "degraded_reasons", ()) or ()) or None
+
+    return {
+        "llm_provider": provider_name[:20],  # llm_provider column is String(20)
+        "llm_mode": getattr(inv, "mode", "DEMO"),
+        "llm_model": getattr(inv, "model", "demo"),
+        "llm_degraded": degraded,
+        "llm_degraded_reason": degraded_reason,
+    }
+
+
+def _run_summary_from_model(run_model: Any) -> RunSummaryResponse:
+    """
+    Builds the API summary from a persisted run.
+
+    Single conversion point on purpose: the upload path and the synthetic path
+    previously each built this by hand and drifted apart, which is how the
+    hardcoded accuracy figures survived on one path only.
+    """
+    return RunSummaryResponse(
+        run_id=run_model.id,
+        created_at=run_model.created_at.isoformat(),
+        total_records=run_model.total_records,
+        initial_reconciled=run_model.initial_reconciled,
+        initial_exceptions=run_model.initial_exceptions,
+        ai_auto_resolved=run_model.ai_auto_resolved,
+        human_review=run_model.human_review,
+        final_resolved=run_model.final_resolved,
+        final_unresolved=run_model.final_unresolved,
+        initial_match_rate=run_model.initial_match_rate,
+        agent_resolution_rate=run_model.agent_resolution_rate,
+        final_resolution_rate=run_model.final_resolution_rate,
+        llm_provider=getattr(run_model, "llm_provider", None) or "demo",
+        llm_mode=getattr(run_model, "llm_mode", None) or "DEMO",
+        llm_model=getattr(run_model, "llm_model", None) or "demo",
+        prompt_tokens=getattr(run_model, "prompt_tokens", None),
+        completion_tokens=getattr(run_model, "completion_tokens", None),
+        total_tokens=getattr(run_model, "total_tokens", None),
+        llm_cases_selected=getattr(run_model, "llm_cases_selected", None),
+        llm_cases_completed=getattr(run_model, "llm_cases_completed", None),
+        llm_cases_not_evaluated=getattr(run_model, "llm_cases_not_evaluated", None),
+        llm_degraded=bool(getattr(run_model, "llm_degraded", False)),
+        llm_degraded_reason=getattr(run_model, "llm_degraded_reason", None),
+        evaluation_group_id=getattr(run_model, "evaluation_group_id", None),
+        evaluation_run_number=getattr(run_model, "evaluation_run_number", None),
+        evaluation_runs_total=getattr(run_model, "evaluation_runs_total", None),
+        # Accuracy fields stay None when the run had no ground truth.
+        phase1_accuracy=run_model.phase1_accuracy,
+        phase2_accuracy=run_model.phase2_accuracy,
+        auto_resolution_precision=run_model.auto_resolution_precision,
+        auto_resolution_recall=run_model.auto_resolution_recall,
+        ground_truth_accuracy=run_model.ground_truth_accuracy,
+        has_ground_truth=bool(getattr(run_model, "has_ground_truth", False)),
+        phase1_detection_precision=getattr(run_model, "phase1_detection_precision", None),
+        phase1_detection_recall=getattr(run_model, "phase1_detection_recall", None),
+        phase1_false_positives=getattr(run_model, "phase1_false_positives", None),
+        phase1_false_negatives=getattr(run_model, "phase1_false_negatives", None),
+        not_evaluated=getattr(run_model, "not_evaluated", 0) or 0,
+        degraded_cases=getattr(run_model, "degraded_cases", 0) or 0,
+        phase1_time_sec=run_model.phase1_time_sec,
+        phase2_time_sec=run_model.phase2_time_sec,
+        end_to_end_time_sec=run_model.end_to_end_time_sec,
+        total_processing_time_sec=run_model.total_processing_time_sec,
+        records_per_second=run_model.records_per_second,
+        phase1_records_per_second=getattr(run_model, "phase1_records_per_second", None),
+        phase2_cases_per_second=getattr(run_model, "phase2_cases_per_second", None),
+        average_case_latency_sec=getattr(run_model, "average_case_latency_sec", None),
+        tokens_per_case=getattr(run_model, "tokens_per_case", None),
+    )
 
 
 def _parse_uploaded_csv(file_bytes: bytes, filename: str, required_fields: List[str]) -> List[Dict[str, Any]]:
@@ -201,8 +323,16 @@ def _execute_reconciliation_pipeline(
     batch_size: Optional[int] = 5,
     db: Optional[Session] = None,
     event_callback: Optional[Any] = None,
+    ground_truth_data: Optional[List[Dict[str, Any]]] = None,
 ) -> RunSummaryResponse:
-    """Core reconciliation execution pipeline supporting synchronous and real-time streaming invocations."""
+    """
+    Core reconciliation execution pipeline supporting synchronous and real-time
+    streaming invocations.
+
+    Accuracy is reported only when `ground_truth_data` is supplied. Without it
+    every accuracy field is persisted as NULL so the UI shows N/A -- an
+    unverifiable 100% is worse than an honest blank.
+    """
     own_session = False
     if db is None:
         db = SessionLocal()
@@ -232,25 +362,18 @@ def _execute_reconciliation_pipeline(
 
         exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
 
-        # Step 4: Phase 2 AI agent investigation via BatchAgentController
+        # Step 4: Phase 2 AI agent investigation via BatchMultiAgentController
         t_p2_start = time.time()
         toolkit = FinancialToolkit(payments_data, ledger_data, bank_data, adjustments_data)
 
-        # Safe provider resolution: respect form param or env var, fallback to demo if key/model missing
-        active_provider = (provider or os.getenv("LLM_PROVIDER") or settings.llm_provider or "demo").lower()
-        if active_provider == "openrouter" and not (os.getenv("OPENROUTER_API_KEY") and os.getenv("OPENROUTER_MODEL")):
-            active_provider = "demo"
-        elif active_provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
-            active_provider = "demo"
-        elif active_provider == "grok" and not os.getenv("GROK_API_KEY"):
-            active_provider = "demo"
+        # Resolve both roles once, then hand the resolution to the controller so
+        # it cannot re-derive a different answer from the environment.
+        resolution = _resolve_investigation_providers(provider)
 
-        llm_client = LLMClient(provider=active_provider)
-
-        from src.agent.batch_controller import BatchAgentController
+        from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
         from src.agent.batch_partitioner import partition_exceptions_balanced
 
-        batch_agent = BatchAgentController(toolkit=toolkit, llm_client=llm_client)
+        batch_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
         effective_batch_size = max(1, min(int(batch_size or 5), 10))
         chunks = partition_exceptions_balanced(exceptions, batch_size=effective_batch_size) if exceptions else []
 
@@ -267,21 +390,74 @@ def _execute_reconciliation_pipeline(
         investigation_logs = []
         cumulative_resolved = 0
         cumulative_human_review = 0
+        cumulative_not_evaluated = 0
+        degraded_cases = 0
+        degraded_transaction_ids: List[str] = []
 
         for i, chunk in enumerate(chunks):
-            chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
+            batch_log = None
+            try:
+                chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
+            except Exception as batch_err:
+                # The whole batch failed (provider outage, auth error, timeout).
+                # These cases were never assessed, so they are NOT_EVALUATED --
+                # not HUMAN_REVIEW. Labelling a system failure as a considered
+                # escalation would overstate what the agent actually did, and
+                # one decision per exception keeps the accounting invariant.
+                logger.warning(
+                    "Batch %d/%d failed entirely (%s); marking %d case(s) NOT_EVALUATED",
+                    i + 1, len(chunks), batch_err, len(chunk),
+                )
+                chunk_decisions = [
+                    AgentDecision(
+                        transaction_id=exc.get("transaction_id", "UNKNOWN"),
+                        decision="NOT_EVALUATED",
+                        exception_type=exc.get("reason", "UNKNOWN"),
+                        resolution_type="NONE",
+                        reason=(
+                            "Agent could not evaluate this case: batch investigation failed "
+                            f"({type(batch_err).__name__}). This is a system failure, not an "
+                            "assessment of the case."
+                        ),
+                        evidence=[f"Phase 1 exception: {exc.get('reason', 'UNKNOWN')}"],
+                        confidence=0.0,
+                        recommended_action="Re-run investigation; case has not been assessed.",
+                        resolution_source="INFRASTRUCTURE_FAILURE",
+                    )
+                    for exc in chunk
+                ]
+
+            # Cases the agents genuinely could not assess, from either the
+            # whole-batch failure above or a per-case failure inside the batch.
+            batch_degraded = (
+                getattr(batch_log, "not_evaluated_count", 0) if batch_log is not None else len(chunk)
+            )
+            degraded_cases += batch_degraded
+            if batch_log is not None:
+                degraded_transaction_ids.extend(getattr(batch_log, "not_evaluated_transaction_ids", []))
+            else:
+                degraded_transaction_ids.extend(d.transaction_id for d in chunk_decisions)
+
+            tool_provenance = getattr(batch_log, "tool_provenance", {}) if batch_log is not None else {}
+
             for d in chunk_decisions:
                 agent_decisions.append(d)
                 if d.decision == "AUTO_RESOLVED":
                     cumulative_resolved += 1
                 elif d.decision == "HUMAN_REVIEW":
                     cumulative_human_review += 1
+                else:
+                    cumulative_not_evaluated += 1
 
                 exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
+                # Real provenance: the toolkit methods the prefetch actually
+                # invoked for this case, and the real LLM interaction count
+                # (0 for cases settled by deterministic Decimal proof).
+                tools_used = list(tool_provenance.get(d.transaction_id, []))
                 t_log = {
                     "transaction_id": d.transaction_id,
                     "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
-                    "tools_used": ["batch_prefetch"],
+                    "tools_used": tools_used,
                     "evidence": d.evidence or [],
                     "decision": d.decision,
                     "resolution_type": d.resolution_type or "NONE",
@@ -289,8 +465,10 @@ def _execute_reconciliation_pipeline(
                     "reason": d.reason,
                     "confidence": d.confidence,
                     "recommended_action": d.recommended_action,
-                    "tool_call_count": 0,
+                    "tool_call_count": len(tools_used),
                     "tool_traces": [],
+                    "resolution_source": d.resolution_source,
+                    "model_interactions": d.model_interactions,
                 }
                 investigation_logs.append(t_log)
 
@@ -303,6 +481,7 @@ def _execute_reconciliation_pipeline(
                     "cases_in_batch": len(chunk),
                     "cumulative_resolved": cumulative_resolved,
                     "cumulative_human_review": cumulative_human_review,
+                    "cumulative_not_evaluated": cumulative_not_evaluated,
                 })
 
         t_p2_end = time.time()
@@ -316,20 +495,62 @@ def _execute_reconciliation_pipeline(
 
         auto_resolved = sum(1 for d in agent_decisions if d.decision == "AUTO_RESOLVED")
         human_review = sum(1 for d in agent_decisions if d.decision == "HUMAN_REVIEW")
+        not_evaluated = sum(1 for d in agent_decisions if d.decision == "NOT_EVALUATED")
 
         final_resolved = initial_reconciled + auto_resolved
-        final_unresolved = human_review
+        final_unresolved = len(agent_decisions) - auto_resolved
+        assert final_resolved + final_unresolved == total_records, "Accounting invariant violated: final_resolved + final_unresolved != total_records"
 
         initial_match_rate = phase1_metrics["match_rate"]
         agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
         final_resolution_rate = (final_resolved / total_records * 100) if total_records > 0 else 0.0
 
-        phase1_throughput = total_records / phase1_time_sec
+        # Throughput, reported per phase so neither rate can be mistaken for the
+        # other. Phase 1 is CPU-bound rule evaluation over every record; Phase 2
+        # is LLM-bound investigation over exceptions only. The headline
+        # records_per_second is the end-to-end rate, which is the only one that
+        # describes the pipeline as a whole.
+        phase1_records_per_second = total_records / phase1_time_sec
+        phase2_cases_per_second = (len(agent_decisions) / phase2_time_sec) if agent_decisions else None
+        end_to_end_records_per_second = total_records / end_to_end_time_sec
         avg_time_per_record = end_to_end_time_sec / total_records
+        avg_case_latency = (phase2_time_sec / len(agent_decisions)) if agent_decisions else None
 
-        provider_name = getattr(llm_client, "provider", "demo")
-        mode_name = getattr(llm_client, "mode", "DEMO")
-        model_name = getattr(llm_client, "model", "demo")
+        run_meta = _multi_agent_run_metadata(batch_agent)
+        provider_name = run_meta["llm_provider"]
+        mode_name = run_meta["llm_mode"]
+        model_name = run_meta["llm_model"]
+        token_totals = _multi_agent_token_totals(batch_agent)
+        tokens_per_case = (
+            (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
+        )
+
+        # Accuracy is measured, never assumed. With no ground truth every
+        # accuracy field stays None and surfaces as N/A.
+        has_ground_truth = bool(ground_truth_data)
+        if has_ground_truth:
+            eval_results = evaluate_agent_decisions(
+                agent_decisions,
+                ground_truth_data,
+                phase1_results=phase1_results,
+            )
+            phase1_accuracy = eval_results.phase1_accuracy
+            phase2_accuracy = eval_results.phase2_decision_accuracy
+            precision = eval_results.auto_resolution_precision
+            recall = eval_results.auto_resolution_recall
+            p1_det_precision = eval_results.phase1_detection_precision
+            p1_det_recall = eval_results.phase1_detection_recall
+            p1_false_positives = eval_results.phase1_false_positives
+            p1_false_negatives = eval_results.phase1_false_negatives
+        else:
+            phase1_accuracy = None
+            phase2_accuracy = None
+            precision = None
+            recall = None
+            p1_det_precision = None
+            p1_det_recall = None
+            p1_false_positives = None
+            p1_false_negatives = None
 
         run_data = {
             "id": run_id,
@@ -346,20 +567,36 @@ def _execute_reconciliation_pipeline(
             "llm_provider": provider_name,
             "llm_mode": mode_name,
             "llm_model": model_name,
-            "prompt_tokens": getattr(llm_client, "last_prompt_tokens", None),
-            "completion_tokens": getattr(llm_client, "last_completion_tokens", None),
-            "total_tokens": getattr(llm_client, "last_total_tokens", None),
-            "phase1_accuracy": 100.0,
-            "phase2_accuracy": 100.0,
-            "auto_resolution_precision": 100.0,
-            "auto_resolution_recall": 100.0,
-            "ground_truth_accuracy": 100.0,
+            "llm_degraded": run_meta["llm_degraded"],
+            "llm_degraded_reason": run_meta["llm_degraded_reason"],
+            "prompt_tokens": token_totals["prompt_tokens"],
+            "completion_tokens": token_totals["completion_tokens"],
+            "total_tokens": token_totals["total_tokens"],
+            "phase1_accuracy": phase1_accuracy,
+            "phase2_accuracy": phase2_accuracy,
+            "auto_resolution_precision": precision,
+            "auto_resolution_recall": recall,
+            "ground_truth_accuracy": phase2_accuracy,
+            "has_ground_truth": has_ground_truth,
+            "phase1_detection_precision": p1_det_precision,
+            "phase1_detection_recall": p1_det_recall,
+            "phase1_false_positives": p1_false_positives,
+            "phase1_false_negatives": p1_false_negatives,
+            "not_evaluated": not_evaluated,
+            "degraded_cases": degraded_cases,
+            "llm_cases_selected": len(exceptions),
+            "llm_cases_completed": auto_resolved + human_review,
+            "llm_cases_not_evaluated": not_evaluated,
             "phase1_time_sec": round(phase1_time_sec, 4),
             "phase2_time_sec": round(phase2_time_sec, 4),
             "end_to_end_time_sec": round(end_to_end_time_sec, 4),
             "total_processing_time_sec": round(end_to_end_time_sec, 4),
-            "records_per_second": round(phase1_throughput, 2),
+            "records_per_second": round(end_to_end_records_per_second, 2),
+            "phase1_records_per_second": round(phase1_records_per_second, 2),
+            "phase2_cases_per_second": round(phase2_cases_per_second, 4) if phase2_cases_per_second is not None else None,
             "average_time_per_record_sec": round(avg_time_per_record, 6),
+            "average_case_latency_sec": round(avg_case_latency, 4) if avg_case_latency is not None else None,
+            "tokens_per_case": round(tokens_per_case, 1) if tokens_per_case is not None else None,
         }
 
         # Step 8: Persist in Database
@@ -397,38 +634,12 @@ def _execute_reconciliation_pipeline(
                 "initial_reconciled": initial_reconciled,
                 "ai_auto_resolved": auto_resolved,
                 "human_review": human_review,
+                "not_evaluated": not_evaluated,
+                "degraded_cases": degraded_cases,
+                "has_ground_truth": has_ground_truth,
             })
 
-        return RunSummaryResponse(
-            run_id=run_model.id,
-            created_at=run_model.created_at.isoformat(),
-            total_records=run_model.total_records,
-            initial_reconciled=run_model.initial_reconciled,
-            initial_exceptions=run_model.initial_exceptions,
-            ai_auto_resolved=run_model.ai_auto_resolved,
-            human_review=run_model.human_review,
-            final_resolved=run_model.final_resolved,
-            final_unresolved=run_model.final_unresolved,
-            initial_match_rate=run_model.initial_match_rate,
-            agent_resolution_rate=run_model.agent_resolution_rate,
-            final_resolution_rate=run_model.final_resolution_rate,
-            llm_provider=getattr(run_model, "llm_provider", provider_name),
-            llm_mode=getattr(run_model, "llm_mode", mode_name),
-            llm_model=getattr(run_model, "llm_model", model_name),
-            prompt_tokens=getattr(run_model, "prompt_tokens", None),
-            completion_tokens=getattr(run_model, "completion_tokens", None),
-            total_tokens=getattr(run_model, "total_tokens", None),
-            phase1_accuracy=run_model.phase1_accuracy,
-            phase2_accuracy=run_model.phase2_accuracy,
-            auto_resolution_precision=run_model.auto_resolution_precision,
-            auto_resolution_recall=run_model.auto_resolution_recall,
-            ground_truth_accuracy=run_model.ground_truth_accuracy,
-            phase1_time_sec=run_model.phase1_time_sec,
-            phase2_time_sec=run_model.phase2_time_sec,
-            end_to_end_time_sec=run_model.end_to_end_time_sec,
-            total_processing_time_sec=run_model.total_processing_time_sec,
-            records_per_second=run_model.records_per_second,
-        )
+        return _run_summary_from_model(run_model)
     finally:
         if own_session and db is not None:
             db.close()
@@ -441,12 +652,18 @@ async def start_upload_reconciliation(
     ledger: UploadFile = File(...),
     bank: UploadFile = File(...),
     adjustments: Optional[UploadFile] = File(None),
+    ground_truth: Optional[UploadFile] = File(None),
     provider: Optional[str] = Form(None),
     batch_size: Optional[int] = Form(5),
 ):
     """
     Initiates asynchronous reconciliation with real-time SSE progress streaming.
     Returns HTTP 202 immediately with run_id and stream_url.
+
+    Supply `ground_truth` (transaction_id, expected_phase2_decision, and
+    optionally is_phase1_exception) to have the run scored. Without it the run
+    still executes and reports throughput and its exception list, but every
+    accuracy figure comes back null rather than fabricated.
     """
     init_db()
     run_id = f"upload_{uuid.uuid4().hex[:8]}"
@@ -456,6 +673,7 @@ async def start_upload_reconciliation(
     l_bytes = await ledger.read()
     b_bytes = await bank.read()
     a_bytes = await adjustments.read() if adjustments else None
+    gt_bytes = await ground_truth.read() if ground_truth else None
 
     payments_data = _parse_uploaded_csv(p_bytes, payments.filename or "payments.csv", ["transaction_id", "amount"])
     ledger_data = _parse_uploaded_csv(l_bytes, ledger.filename or "ledger.csv", ["transaction_id", "gross_amount", "fee"])
@@ -464,6 +682,15 @@ async def start_upload_reconciliation(
         _parse_uploaded_csv(a_bytes, adjustments.filename or "adjustments.csv", ["transaction_id", "adjustment_type", "amount"])
         if a_bytes
         else []
+    )
+    ground_truth_data = (
+        _parse_uploaded_csv(
+            gt_bytes,
+            ground_truth.filename or "ground_truth.csv",
+            ["transaction_id", "expected_phase2_decision"],
+        )
+        if gt_bytes
+        else None
     )
 
     event_q = queue.Queue()
@@ -483,6 +710,7 @@ async def start_upload_reconciliation(
                 provider=provider,
                 batch_size=batch_size,
                 event_callback=event_callback,
+                ground_truth_data=ground_truth_data,
             )
         except Exception as e:
             event_q.put({"event": "run_error", "error": str(e)})
@@ -537,12 +765,16 @@ async def create_run_from_upload(
     ledger: UploadFile = File(...),
     bank: UploadFile = File(...),
     adjustments: Optional[UploadFile] = File(None),
+    ground_truth: Optional[UploadFile] = File(None),
     provider: Optional[str] = Form(None),
     batch_size: Optional[int] = Form(5),
     db: Session = Depends(get_db),
 ):
     """
     Executes the reconciliation pipeline synchronously with user-uploaded CSV source files.
+
+    Supply `ground_truth` to have the run scored. Without it, accuracy fields
+    are returned as null rather than assumed.
     """
     init_db()
     run_id = f"upload_{uuid.uuid4().hex[:8]}"
@@ -551,6 +783,7 @@ async def create_run_from_upload(
     l_bytes = await ledger.read()
     b_bytes = await bank.read()
     a_bytes = await adjustments.read() if adjustments else None
+    gt_bytes = await ground_truth.read() if ground_truth else None
 
     payments_data = _parse_uploaded_csv(p_bytes, payments.filename or "payments.csv", ["transaction_id", "amount"])
     ledger_data = _parse_uploaded_csv(l_bytes, ledger.filename or "ledger.csv", ["transaction_id", "gross_amount", "fee"])
@@ -559,6 +792,15 @@ async def create_run_from_upload(
         _parse_uploaded_csv(a_bytes, adjustments.filename or "adjustments.csv", ["transaction_id", "adjustment_type", "amount"])
         if a_bytes
         else []
+    )
+    ground_truth_data = (
+        _parse_uploaded_csv(
+            gt_bytes,
+            ground_truth.filename or "ground_truth.csv",
+            ["transaction_id", "expected_phase2_decision"],
+        )
+        if gt_bytes
+        else None
     )
 
     return _execute_reconciliation_pipeline(
@@ -570,6 +812,7 @@ async def create_run_from_upload(
         provider=provider,
         batch_size=batch_size,
         db=db,
+        ground_truth_data=ground_truth_data,
     )
 
 
@@ -611,46 +854,77 @@ def create_run(db: Session = Depends(get_db)):
     # Step 3: Filter exceptions
     exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
 
-    # Step 4: Phase 2 AI agent investigation
+    # Step 4: Phase 2 AI agent investigation (unified batch multi-agent)
     t_p2_start = time.time()
     toolkit = FinancialToolkit(payments, ledger, bank, adjustments)
-    llm_client = LLMClient()
-    agent = AgentController(toolkit=toolkit, llm_client=llm_client)
+
+    from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
+    from src.agent.batch_partitioner import partition_exceptions_balanced
+
+    resolution = _resolve_investigation_providers()
+    batch_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
+    chunks = partition_exceptions_balanced(exceptions, batch_size=5) if exceptions else []
 
     agent_decisions = []
     investigation_logs = []
+    degraded_cases = 0
 
-    for exc in exceptions:
+    for chunk in chunks:
+        batch_log = None
         try:
-            decision, log = agent.investigate_exception(exc)
-            agent_decisions.append(decision)
-            investigation_logs.append(log.model_dump())
+            chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
         except Exception as e:
-            fallback_decision = AgentDecision(
-                transaction_id=exc["transaction_id"],
-                decision="HUMAN_REVIEW",
-                exception_type=exc.get("reason", "UNKNOWN"),
-                resolution_type="NONE",
-                resolved_difference=None,
-                reason=f"Application error: {str(e)}",
-                evidence=[f"Error: {str(e)}"],
-                confidence=0.0,
-                recommended_action="Manual review required due to application error.",
-            )
-            agent_decisions.append(fallback_decision)
-            fallback_log = {
-                "transaction_id": exc["transaction_id"],
-                "initial_exception": exc["reason"],
-                "tools_used": [],
-                "evidence": [f"Error: {str(e)}"],
-                "decision": "HUMAN_REVIEW",
-                "resolution_type": "NONE",
-                "resolved_difference": None,
-                "reason": f"Application error: {str(e)}",
-                "confidence": 0.0,
-                "recommended_action": "Manual review required due to application error.",
-            }
-            investigation_logs.append(fallback_log)
+            # Whole-batch failure. These cases were never assessed, so they are
+            # NOT_EVALUATED rather than HUMAN_REVIEW -- a system failure is not
+            # a considered escalation. One decision per exception still holds,
+            # so the accounting invariant is preserved.
+            logger.warning("Batch failed entirely (%s); marking %d case(s) NOT_EVALUATED", e, len(chunk))
+            chunk_decisions = [
+                AgentDecision(
+                    transaction_id=exc["transaction_id"],
+                    decision="NOT_EVALUATED",
+                    exception_type=exc.get("reason", "UNKNOWN"),
+                    resolution_type="NONE",
+                    resolved_difference=None,
+                    reason=(
+                        f"Agent could not evaluate this case: batch investigation failed "
+                        f"({type(e).__name__}). This is a system failure, not an assessment "
+                        f"of the case."
+                    ),
+                    evidence=[f"Error: {str(e)}"],
+                    confidence=0.0,
+                    recommended_action="Re-run investigation; case has not been assessed.",
+                    resolution_source="INFRASTRUCTURE_FAILURE",
+                )
+                for exc in chunk
+            ]
+
+        degraded_cases += (
+            getattr(batch_log, "not_evaluated_count", 0) if batch_log is not None else len(chunk)
+        )
+        tool_provenance = getattr(batch_log, "tool_provenance", {}) if batch_log is not None else {}
+
+        for d in chunk_decisions:
+            agent_decisions.append(d)
+            exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
+            # Real provenance: the toolkit methods actually invoked for this case.
+            tools_used = list(tool_provenance.get(d.transaction_id, []))
+            investigation_logs.append({
+                "transaction_id": d.transaction_id,
+                "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
+                "tools_used": tools_used,
+                "evidence": d.evidence or [],
+                "decision": d.decision,
+                "resolution_type": d.resolution_type or "NONE",
+                "resolved_difference": d.resolved_difference,
+                "reason": d.reason,
+                "confidence": d.confidence,
+                "recommended_action": d.recommended_action,
+                "tool_call_count": len(tools_used),
+                "tool_traces": [],
+                "resolution_source": d.resolution_source,
+                "model_interactions": d.model_interactions,
+            })
 
     t_p2_end = time.time()
     phase2_time_sec = max(t_p2_end - t_p2_start, 0.001)
@@ -663,22 +937,39 @@ def create_run(db: Session = Depends(get_db)):
 
     auto_resolved = sum(1 for d in agent_decisions if d.decision == "AUTO_RESOLVED")
     human_review = sum(1 for d in agent_decisions if d.decision == "HUMAN_REVIEW")
+    not_evaluated = sum(1 for d in agent_decisions if d.decision == "NOT_EVALUATED")
 
     final_resolved = initial_reconciled + auto_resolved
-    final_unresolved = human_review
+    final_unresolved = len(agent_decisions) - auto_resolved
+    assert final_resolved + final_unresolved == total_records, "Accounting invariant violated: final_resolved + final_unresolved != total_records"
 
     initial_match_rate = phase1_metrics["match_rate"]
     agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
     final_resolution_rate = (final_resolved / total_records * 100) if total_records > 0 else 0.0
 
-    eval_results = evaluate_agent_decisions(agent_decisions, ground_truth)
+    # Synthetic data ships with ground truth, so this path is always scored --
+    # including Phase 1 detection, which is measured rather than assumed.
+    eval_results = evaluate_agent_decisions(
+        agent_decisions,
+        ground_truth,
+        phase1_results=phase1_results,
+    )
 
-    phase1_throughput = total_records / phase1_time_sec
+    # Throughput reported per phase; the headline rate is end-to-end.
+    phase1_records_per_second = total_records / phase1_time_sec
+    phase2_cases_per_second = (len(agent_decisions) / phase2_time_sec) if agent_decisions else None
+    end_to_end_records_per_second = total_records / end_to_end_time_sec
     avg_time_per_record = end_to_end_time_sec / total_records
+    avg_case_latency = (phase2_time_sec / len(agent_decisions)) if agent_decisions else None
 
-    provider_name = getattr(llm_client, "provider", "demo")
-    mode_name = getattr(llm_client, "mode", "DEMO")
-    model_name = getattr(llm_client, "model", "demo")
+    run_meta = _multi_agent_run_metadata(batch_agent)
+    provider_name = run_meta["llm_provider"]
+    mode_name = run_meta["llm_mode"]
+    model_name = run_meta["llm_model"]
+    token_totals = _multi_agent_token_totals(batch_agent)
+    tokens_per_case = (
+        (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
+    )
 
     run_data = {
         "id": run_id,
@@ -695,20 +986,36 @@ def create_run(db: Session = Depends(get_db)):
         "llm_provider": provider_name,
         "llm_mode": mode_name,
         "llm_model": model_name,
-        "prompt_tokens": getattr(llm_client, "last_prompt_tokens", None),
-        "completion_tokens": getattr(llm_client, "last_completion_tokens", None),
-        "total_tokens": getattr(llm_client, "last_total_tokens", None),
+        "llm_degraded": run_meta["llm_degraded"],
+        "llm_degraded_reason": run_meta["llm_degraded_reason"],
+        "prompt_tokens": token_totals["prompt_tokens"],
+        "completion_tokens": token_totals["completion_tokens"],
+        "total_tokens": token_totals["total_tokens"],
         "phase1_accuracy": eval_results.phase1_accuracy,
         "phase2_accuracy": eval_results.phase2_decision_accuracy,
         "auto_resolution_precision": eval_results.auto_resolution_precision,
         "auto_resolution_recall": eval_results.auto_resolution_recall,
         "ground_truth_accuracy": eval_results.phase2_decision_accuracy,
+        "has_ground_truth": True,
+        "phase1_detection_precision": eval_results.phase1_detection_precision,
+        "phase1_detection_recall": eval_results.phase1_detection_recall,
+        "phase1_false_positives": eval_results.phase1_false_positives,
+        "phase1_false_negatives": eval_results.phase1_false_negatives,
+        "not_evaluated": not_evaluated,
+        "degraded_cases": degraded_cases,
+        "llm_cases_selected": len(exceptions),
+        "llm_cases_completed": auto_resolved + human_review,
+        "llm_cases_not_evaluated": not_evaluated,
         "phase1_time_sec": round(phase1_time_sec, 4),
         "phase2_time_sec": round(phase2_time_sec, 4),
         "end_to_end_time_sec": round(end_to_end_time_sec, 4),
         "total_processing_time_sec": round(end_to_end_time_sec, 4),
-        "records_per_second": round(phase1_throughput, 2),
+        "records_per_second": round(end_to_end_records_per_second, 2),
+        "phase1_records_per_second": round(phase1_records_per_second, 2),
+        "phase2_cases_per_second": round(phase2_cases_per_second, 4) if phase2_cases_per_second is not None else None,
         "average_time_per_record_sec": round(avg_time_per_record, 6),
+        "average_case_latency_sec": round(avg_case_latency, 4) if avg_case_latency is not None else None,
+        "tokens_per_case": round(tokens_per_case, 1) if tokens_per_case is not None else None,
     }
 
     # Step 6: Persist in Database
@@ -736,75 +1043,14 @@ def create_run(db: Session = Depends(get_db)):
     FinanceRepository.save_adjustments(db, run_id, adjustments)
     FinanceRepository.save_agent_investigations(db, run_id, investigation_logs)
 
-    return RunSummaryResponse(
-        run_id=run_model.id,
-        created_at=run_model.created_at.isoformat(),
-        total_records=run_model.total_records,
-        initial_reconciled=run_model.initial_reconciled,
-        initial_exceptions=run_model.initial_exceptions,
-        ai_auto_resolved=run_model.ai_auto_resolved,
-        human_review=run_model.human_review,
-        final_resolved=run_model.final_resolved,
-        final_unresolved=run_model.final_unresolved,
-        initial_match_rate=run_model.initial_match_rate,
-        agent_resolution_rate=run_model.agent_resolution_rate,
-        final_resolution_rate=run_model.final_resolution_rate,
-        llm_provider=getattr(run_model, "llm_provider", provider_name),
-        llm_mode=getattr(run_model, "llm_mode", mode_name),
-        llm_model=getattr(run_model, "llm_model", model_name),
-        prompt_tokens=getattr(run_model, "prompt_tokens", None),
-        completion_tokens=getattr(run_model, "completion_tokens", None),
-        total_tokens=getattr(run_model, "total_tokens", None),
-        phase1_accuracy=run_model.phase1_accuracy,
-        phase2_accuracy=run_model.phase2_accuracy,
-        auto_resolution_precision=run_model.auto_resolution_precision,
-        auto_resolution_recall=run_model.auto_resolution_recall,
-        ground_truth_accuracy=run_model.ground_truth_accuracy,
-        phase1_time_sec=run_model.phase1_time_sec,
-        phase2_time_sec=run_model.phase2_time_sec,
-        end_to_end_time_sec=run_model.end_to_end_time_sec,
-        total_processing_time_sec=run_model.total_processing_time_sec,
-        records_per_second=run_model.records_per_second,
-    )
+    return _run_summary_from_model(run_model)
 
 
 @router.get("", response_model=List[RunSummaryResponse])
 def list_runs(limit: int = 20, db: Session = Depends(get_db)):
     """Lists recent execution runs."""
     runs = FinanceRepository.list_runs(db, limit=limit)
-    return [
-        RunSummaryResponse(
-            run_id=r.id,
-            created_at=r.created_at.isoformat(),
-            total_records=r.total_records,
-            initial_reconciled=r.initial_reconciled,
-            initial_exceptions=r.initial_exceptions,
-            ai_auto_resolved=r.ai_auto_resolved,
-            human_review=r.human_review,
-            final_resolved=r.final_resolved,
-            final_unresolved=r.final_unresolved,
-            initial_match_rate=r.initial_match_rate,
-            agent_resolution_rate=r.agent_resolution_rate,
-            final_resolution_rate=r.final_resolution_rate,
-            llm_provider=getattr(r, "llm_provider", "demo") or "demo",
-            llm_mode=getattr(r, "llm_mode", "DEMO") or "DEMO",
-            llm_model=getattr(r, "llm_model", "demo") or "demo",
-            prompt_tokens=getattr(r, "prompt_tokens", None),
-            completion_tokens=getattr(r, "completion_tokens", None),
-            total_tokens=getattr(r, "total_tokens", None),
-            phase1_accuracy=r.phase1_accuracy,
-            phase2_accuracy=r.phase2_accuracy,
-            auto_resolution_precision=r.auto_resolution_precision,
-            auto_resolution_recall=r.auto_resolution_recall,
-            ground_truth_accuracy=r.ground_truth_accuracy,
-            phase1_time_sec=r.phase1_time_sec,
-            phase2_time_sec=r.phase2_time_sec,
-            end_to_end_time_sec=r.end_to_end_time_sec,
-            total_processing_time_sec=r.total_processing_time_sec,
-            records_per_second=r.records_per_second,
-        )
-        for r in runs
-    ]
+    return [_run_summary_from_model(r) for r in runs]
 
 
 @router.get("/{run_id}/diagnostics/data-integrity", response_model=DataIntegrityDiagnosticResponse)

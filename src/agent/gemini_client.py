@@ -58,6 +58,7 @@ class GeminiLLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
     ) -> Any:
         """
         Sends a chat completion request to Gemini with tools and multi-turn message history.
@@ -144,11 +145,15 @@ class GeminiLLMClient:
                     )
                 )
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=gemini_tools,
-            temperature=0.1,
-        )
+        config_kwargs: Dict[str, Any] = {
+            "system_instruction": system_instruction,
+            "tools": gemini_tools,
+            "temperature": 0.1,
+        }
+        if max_tokens is not None:
+            config_kwargs["max_output_tokens"] = max_tokens
+
+        config = types.GenerateContentConfig(**config_kwargs)
 
         response = None
         last_exception = None

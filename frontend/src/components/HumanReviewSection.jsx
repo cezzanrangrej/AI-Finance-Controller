@@ -4,7 +4,7 @@ import { ArrowUpRight, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-re
 export default function HumanReviewSection({ exceptions, onSelectException }) {
   if (!exceptions || exceptions.length === 0) return null;
 
-  const humanReviewCases = exceptions.filter((e) => e.decision === 'HUMAN_REVIEW');
+  const humanReviewCases = exceptions.filter((e) => e.decision === 'HUMAN_REVIEW' || e.decision === 'NOT_EVALUATED');
   const autoResolvedCases = exceptions.filter((e) => e.decision === 'AUTO_RESOLVED');
 
   const categoryCounts = humanReviewCases.reduce((acc, curr) => {
@@ -112,9 +112,15 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
                   <span className="font-mono font-bold text-xs text-text group-hover:text-accent-coral transition-colors">
                     {item.transaction_id}
                   </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-accent-coral/10 text-text border border-accent-coral/30">
-                    <AlertTriangle className="h-3 w-3 text-accent-coral" /> HUMAN REVIEW
-                  </span>
+                  {item.decision === 'NOT_EVALUATED' ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 border border-amber-500/30">
+                      <AlertTriangle className="h-3 w-3 text-amber-500" /> PROVIDER OUTAGE — not yet evaluated
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-accent-coral/10 text-text border border-accent-coral/30">
+                      <AlertTriangle className="h-3 w-3 text-accent-coral" /> HUMAN REVIEW
+                    </span>
+                  )}
                 </div>
 
                 <div className="text-[11px] font-mono text-text-secondary mt-1">

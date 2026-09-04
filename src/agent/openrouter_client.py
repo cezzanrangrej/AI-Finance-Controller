@@ -46,8 +46,9 @@ class OpenRouterMessage:
 
 
 class OpenRouterChoice:
-    def __init__(self, message: OpenRouterMessage) -> None:
+    def __init__(self, message: OpenRouterMessage, finish_reason: Optional[str] = None) -> None:
         self.message = message
+        self.finish_reason = finish_reason
 
 
 class OpenRouterUsage:
@@ -125,6 +126,7 @@ class OpenRouterLLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
     ) -> OpenRouterResponse:
         """
         Sends a chat completion request to OpenRouter with tools and multi-turn message history.
@@ -145,6 +147,8 @@ class OpenRouterLLMClient:
             "messages": formatted_messages,
             "temperature": 0.1,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
@@ -177,6 +181,21 @@ class OpenRouterLLMClient:
 
                     response.raise_for_status()
                     data = response.json()
+                    # Some providers (notably free-tier models via OpenRouter) return HTTP 200
+                    # with an error object or an empty `choices` array when the upstream is
+                    # briefly unavailable. Treat that as transient and retry instead of
+                    # surfacing an empty response (which downstream reads as a parse failure).
+                    if data.get("error") or not data.get("choices"):
+                        err_text = json.dumps(data.get("error") or data)[:300]
+                        if attempt == MAX_RETRIES - 1:
+                            raise RuntimeError(
+                                f"OpenRouter returned no choices after {MAX_RETRIES} attempts: {err_text}"
+                            )
+                        sleep_time = max(INITIAL_RETRY_DELAY * (2**attempt), 3.0)
+                        print(f"[Retry] Empty/err response, pausing {sleep_time:.1f}s...", flush=True)
+                        time.sleep(sleep_time)
+                        data = None
+                        continue
                     break
 
                 except (httpx.TimeoutException, httpx.NetworkError) as e:
@@ -222,7 +241,7 @@ class OpenRouterLLMClient:
                 content=content,
                 tool_calls=tool_calls_list if tool_calls_list else None,
             )
-            choices_list.append(OpenRouterChoice(msg_obj))
+            choices_list.append(OpenRouterChoice(msg_obj, finish_reason=choice_dict.get("finish_reason")))
 
         usage_dict = data.get("usage", {})
         usage_obj = None

@@ -45,6 +45,7 @@ def test_create_run_e2e_phase31():
     assert data["ai_auto_resolved"] > 0
     assert data["human_review"] > 0
     assert data["ai_auto_resolved"] + data["human_review"] == 30
+    assert data["final_resolved"] + data["final_unresolved"] == data["total_records"]
 
     assert data["phase1_accuracy"] == 100.0
     assert data["phase2_accuracy"] == 100.0
@@ -369,6 +370,48 @@ def test_upload_start_and_stream_sse():
 
     events = stream_resp.text
     assert "phase1_started" in events or "run_completed" in events
+
+
+def test_accounting_invariant_with_not_evaluated(monkeypatch):
+    """Test 21: Accounting invariant final_resolved + final_unresolved == total_records holds with NOT_EVALUATED."""
+    from src.agent.controller import AgentController
+    from src.agent.schemas import AgentDecision
+
+    orig_investigate = AgentController.investigate_exception
+
+    call_count = [0]
+    def mock_investigate(self, exc):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return AgentDecision(
+                transaction_id=exc["transaction_id"],
+                decision="NOT_EVALUATED",
+                exception_type=exc.get("reason", "UNKNOWN"),
+                resolution_type="NONE",
+                reason="Provider outage simulated",
+                evidence=[],
+                confidence=0.0,
+                recommended_action="Manual review required due to provider outage.",
+            ), {
+                "transaction_id": exc["transaction_id"],
+                "initial_exception": exc.get("reason", "UNKNOWN"),
+                "tools_used": [],
+                "evidence": [],
+                "decision": "NOT_EVALUATED",
+                "resolution_type": "NONE",
+                "resolved_difference": None,
+                "reason": "Provider outage simulated",
+                "confidence": 0.0,
+                "recommended_action": "Manual review required due to provider outage.",
+            }
+        return orig_investigate(self, exc)
+
+    monkeypatch.setattr(AgentController, "investigate_exception", mock_investigate)
+
+    response = client.post("/api/runs")
+    assert response.status_code == 201
+    data = response.json()
+    assert data["final_resolved"] + data["final_unresolved"] == data["total_records"]
 
 
 

@@ -31,16 +31,29 @@ class RunSummaryResponse(BaseModel):
     llm_cases_selected: Optional[int] = None
     llm_cases_completed: Optional[int] = None
     llm_cases_not_evaluated: Optional[int] = None
+    # True when a role fell back to the offline demo engine despite a real
+    # provider being configured. Surfaced so the UI can label such a run.
+    llm_degraded: Optional[bool] = False
+    llm_degraded_reason: Optional[str] = None
     evaluation_group_id: Optional[str] = None
     evaluation_run_number: Optional[int] = None
     evaluation_runs_total: Optional[int] = None
 
-    # Evaluation metrics
+    # Evaluation metrics. None means "not measured" -- render as N/A.
     phase1_accuracy: Optional[float] = None
     phase2_accuracy: Optional[float] = None
     auto_resolution_precision: Optional[float] = None
     auto_resolution_recall: Optional[float] = None
     ground_truth_accuracy: Optional[float] = None
+    has_ground_truth: bool = False
+    phase1_detection_precision: Optional[float] = None
+    phase1_detection_recall: Optional[float] = None
+    phase1_false_positives: Optional[int] = None
+    phase1_false_negatives: Optional[int] = None
+
+    # Honest exception accounting
+    not_evaluated: int = 0
+    degraded_cases: int = 0
 
     # Phase-separated timing
     phase1_time_sec: Optional[float] = None
@@ -48,6 +61,10 @@ class RunSummaryResponse(BaseModel):
     end_to_end_time_sec: Optional[float] = None
     total_processing_time_sec: Optional[float] = None
     records_per_second: Optional[float] = None
+    phase1_records_per_second: Optional[float] = None
+    phase2_cases_per_second: Optional[float] = None
+    average_case_latency_sec: Optional[float] = None
+    tokens_per_case: Optional[float] = None
 
 
 class MetricsResponse(BaseModel):
@@ -74,16 +91,29 @@ class MetricsResponse(BaseModel):
     llm_cases_selected: Optional[int] = None
     llm_cases_completed: Optional[int] = None
     llm_cases_not_evaluated: Optional[int] = None
+    # True when a role fell back to the offline demo engine despite a real
+    # provider being configured. Surfaced so the UI can label such a run.
+    llm_degraded: Optional[bool] = False
+    llm_degraded_reason: Optional[str] = None
     evaluation_group_id: Optional[str] = None
     evaluation_run_number: Optional[int] = None
     evaluation_runs_total: Optional[int] = None
 
-    # Evaluation metrics
-    phase1_accuracy: Optional[float] = 100.0
+    # Evaluation metrics. None means "not measured" -- render as N/A, never 100%.
+    phase1_accuracy: Optional[float] = None
     phase2_accuracy: Optional[float] = None
     auto_resolution_precision: Optional[float] = None
     auto_resolution_recall: Optional[float] = None
     ground_truth_accuracy: Optional[float] = None
+    has_ground_truth: bool = False
+    phase1_detection_precision: Optional[float] = None
+    phase1_detection_recall: Optional[float] = None
+    phase1_false_positives: Optional[int] = None
+    phase1_false_negatives: Optional[int] = None
+
+    # Honest exception accounting
+    not_evaluated: int = 0
+    degraded_cases: int = 0
 
     # Phase-separated timing & throughput
     phase1_time_sec: Optional[float] = None
@@ -91,7 +121,11 @@ class MetricsResponse(BaseModel):
     end_to_end_time_sec: Optional[float] = None
     total_processing_time_sec: Optional[float] = None
     records_per_second: Optional[float] = None
+    phase1_records_per_second: Optional[float] = None
+    phase2_cases_per_second: Optional[float] = None
     average_time_per_record_sec: Optional[float] = None
+    average_case_latency_sec: Optional[float] = None
+    tokens_per_case: Optional[float] = None
 
     exception_breakdown: Dict[str, int]
 
@@ -115,9 +149,9 @@ class PerRunSummary(BaseModel):
     cases_not_evaluated: int
     auto_resolved: int
     human_review: int
-    decision_accuracy: float
-    auto_resolution_precision: float
-    auto_resolution_recall: float
+    decision_accuracy: Optional[float] = None
+    auto_resolution_precision: Optional[float] = None
+    auto_resolution_recall: Optional[float] = None
     phase2_time_sec: float
     total_tokens: Optional[int] = None
 
@@ -134,9 +168,9 @@ class EvaluationGroupSummaryResponse(BaseModel):
     not_evaluated: int
     auto_resolved: int
     human_review: int
-    aggregate_accuracy: float
-    aggregate_precision: float
-    aggregate_recall: float
+    aggregate_accuracy: Optional[float] = None
+    aggregate_precision: Optional[float] = None
+    aggregate_recall: Optional[float] = None
     human_review_rate: float
     not_evaluated_rate: float
     total_processing_time_sec: float

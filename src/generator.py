@@ -140,6 +140,9 @@ class SyntheticDataGenerator:
                 "expected_phase2_decision": gt_phase2_decision,
                 "expected_status": gt_phase1_status,
                 "expected_exception": gt_phase1_exception,
+                # Explicit detection label so Phase 1 can be scored for
+                # false positives and false negatives, not assumed correct.
+                "is_phase1_exception": gt_phase1_status == "EXCEPTION",
             })
 
             # 2. Ledger & Bank Record Construction
@@ -329,6 +332,7 @@ class SyntheticDataGenerator:
                 "expected_phase2_decision",
                 "expected_status",
                 "expected_exception",
+                "is_phase1_exception",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()

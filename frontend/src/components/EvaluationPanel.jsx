@@ -19,7 +19,12 @@ export default function EvaluationPanel({
   const initialReconciled = metrics?.initial_reconciled ?? 0;
   const initialExceptions = metrics?.initial_exceptions ?? (totalRecords >= initialReconciled ? totalRecords - initialReconciled : 0);
   const aiAutoResolved = metrics?.ai_auto_resolved ?? metrics?.ai_resolved ?? 0;
-  const humanReview = metrics?.human_review ?? (initialExceptions >= aiAutoResolved ? initialExceptions - aiAutoResolved : 0);
+  // Three buckets, not two. `not_evaluated` is cases the agent never managed to
+  // judge; folding them into human_review would present a system failure as a
+  // considered escalation.
+  const notEvaluated = metrics?.not_evaluated ?? 0;
+  const degradedCases = metrics?.degraded_cases ?? 0;
+  const humanReview = metrics?.human_review ?? (initialExceptions >= aiAutoResolved + notEvaluated ? initialExceptions - aiAutoResolved - notEvaluated : 0);
 
   const initialMatchRate = metrics?.initial_match_rate ?? (totalRecords > 0 ? (initialReconciled / totalRecords) * 100 : 0);
   const finalResolutionRate = metrics?.final_resolution_rate ?? (totalRecords > 0 ? ((initialReconciled + aiAutoResolved) / totalRecords) * 100 : 0);
@@ -29,6 +34,14 @@ export default function EvaluationPanel({
   const phase2Accuracy = metrics?.phase2_accuracy ?? metrics?.ground_truth_accuracy;
   const precision = metrics?.auto_resolution_precision;
   const recall = metrics?.auto_resolution_recall;
+  const phase1Accuracy = metrics?.phase1_accuracy;
+  const phase1Precision = metrics?.phase1_detection_precision;
+  const phase1Recall = metrics?.phase1_detection_recall;
+  const phase1FalsePositives = metrics?.phase1_false_positives;
+  const phase1FalseNegatives = metrics?.phase1_false_negatives;
+
+  // A rate of 0 is a real measurement; only null/undefined is "not measured".
+  const pct = (v) => (v != null ? `${Number(v).toFixed(1)}%` : 'N/A');
 
   const batchList = streamingState?.batches ? Object.values(streamingState.batches) : [];
 
@@ -246,15 +259,38 @@ export default function EvaluationPanel({
               </p>
             </div>
 
-            <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
               <div className="bg-background px-3 py-1.5 rounded border border-accent-green/30 text-text">
                 AI Auto-Resolved: <strong>{aiAutoResolved}</strong>
               </div>
               <div className="bg-background px-3 py-1.5 rounded border border-accent-coral/30 text-text">
                 Human Review: <strong>{humanReview}</strong>
               </div>
+              {notEvaluated > 0 && (
+                <div
+                  className="bg-background px-3 py-1.5 rounded border border-rose-300 text-rose-800"
+                  title="Cases the agent could not assess due to an infrastructure failure. Counted as unresolved and excluded from accuracy denominators."
+                >
+                  Not Evaluated: <strong>{notEvaluated}</strong>
+                </div>
+              )}
             </div>
           </div>
+
+          {notEvaluated > 0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 text-xs text-rose-800 space-y-1">
+              <div className="flex items-center gap-2 font-semibold">
+                <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-600" />
+                <span>{notEvaluated} case{notEvaluated === 1 ? '' : 's'} could not be evaluated</span>
+              </div>
+              <p className="font-mono text-[11px] leading-relaxed">
+                The agent failed on {notEvaluated} case{notEvaluated === 1 ? '' : 's'}
+                {degradedCases > 0 && ` (${degradedCases} batch${degradedCases === 1 ? '' : 'es'} degraded)`}.
+                These are counted as unresolved and excluded from the accuracy denominators below —
+                they are agent failures, not escalations to a human.
+              </p>
+            </div>
+          )}
 
           {/* Operational Metrics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -289,38 +325,90 @@ export default function EvaluationPanel({
             </div>
           </div>
 
-          {/* Ground Truth Benchmark Metrics (ONLY DISPLAYED IF GROUND TRUTH EXISTS) */}
-          {hasGroundTruth && (
+          {/* Measured accuracy. Rendered only when a ground-truth file was
+              supplied; otherwise we say so, rather than showing a number
+              nobody could verify. */}
+          {hasGroundTruth ? (
             <div className="bg-surface border border-border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between border-b border-border pb-2">
                 <span className="text-xs font-semibold uppercase tracking-wider text-text">
-                  Ground Truth Benchmark Accuracy
+                  Measured Accuracy vs Ground Truth
                 </span>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-accent-green/10 text-text border border-accent-green/30 font-medium">
-                  Verified Ground Truth
+                  Scored against uploaded key
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
                 <div className="bg-background p-3 rounded border border-border">
-                  <span className="text-[10px] text-text-secondary/60 block font-sans">Decision Accuracy</span>
-                  <span className="text-lg font-bold text-text">
-                    {phase2Accuracy != null ? `${Number(phase2Accuracy).toFixed(1)}%` : '—'}
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Phase 2 Decision Accuracy</span>
+                  <span className="text-lg font-bold text-text">{pct(phase2Accuracy)}</span>
+                </div>
+                <div className="bg-background p-3 rounded border border-border">
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Auto-Resolution Precision</span>
+                  <span className="text-lg font-bold text-primary">{pct(precision)}</span>
+                  <span className="text-[10px] text-text-secondary/60 block font-sans mt-0.5">
+                    Share of auto-resolutions that were correct
                   </span>
                 </div>
                 <div className="bg-background p-3 rounded border border-border">
-                  <span className="text-[10px] text-text-secondary/60 block font-sans">Precision (Zero False Positives)</span>
-                  <span className="text-lg font-bold text-primary">
-                    {precision != null ? `${Number(precision).toFixed(1)}%` : '—'}
-                  </span>
-                </div>
-                <div className="bg-background p-3 rounded border border-border">
-                  <span className="text-[10px] text-text-secondary/60 block font-sans">Recall (Explainable Recovery)</span>
-                  <span className="text-lg font-bold text-primary">
-                    {recall != null ? `${Number(recall).toFixed(1)}%` : '—'}
+                  <span className="text-[10px] text-text-secondary/60 block font-sans">Auto-Resolution Recall</span>
+                  <span className="text-lg font-bold text-primary">{pct(recall)}</span>
+                  <span className="text-[10px] text-text-secondary/60 block font-sans mt-0.5">
+                    Share of resolvable cases actually resolved
                   </span>
                 </div>
               </div>
+
+              {/* Phase 1 is deterministic, which is not the same as correct. */}
+              <div className="border-t border-border pt-3 space-y-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+                  Phase 1 Detection Quality
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                  <div className="bg-background p-2.5 rounded border border-border">
+                    <span className="text-[10px] text-text-secondary/60 block font-sans">Accuracy</span>
+                    <span className="text-sm font-bold text-text">{pct(phase1Accuracy)}</span>
+                  </div>
+                  <div className="bg-background p-2.5 rounded border border-border">
+                    <span className="text-[10px] text-text-secondary/60 block font-sans">Precision</span>
+                    <span className="text-sm font-bold text-text">{pct(phase1Precision)}</span>
+                  </div>
+                  <div className="bg-background p-2.5 rounded border border-border">
+                    <span className="text-[10px] text-text-secondary/60 block font-sans">Recall</span>
+                    <span className="text-sm font-bold text-text">{pct(phase1Recall)}</span>
+                  </div>
+                  <div className="bg-background p-2.5 rounded border border-border">
+                    <span className="text-[10px] text-text-secondary/60 block font-sans">False Pos / Neg</span>
+                    <span className="text-sm font-bold text-text">
+                      {phase1FalsePositives != null ? phase1FalsePositives : '—'}
+                      {' / '}
+                      {phase1FalseNegatives != null ? phase1FalseNegatives : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-surface border border-border rounded-lg p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-text-secondary flex-shrink-0" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-text">
+                  Accuracy Not Measured
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-surface-alt text-text-secondary border border-border font-medium">
+                  N/A
+                </span>
+              </div>
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                No ground-truth file was supplied for this run, so decision accuracy,
+                precision and recall are <strong>not measured</strong> — not 100%. The record
+                counts, resolution counts and throughput above are exact; whether those
+                resolutions were <em>correct</em> is unverified.
+              </p>
+              <p className="text-[11px] text-text-secondary/70 font-mono">
+                Upload a ground_truth.csv in Data Sources to score the next run.
+              </p>
             </div>
           )}
 

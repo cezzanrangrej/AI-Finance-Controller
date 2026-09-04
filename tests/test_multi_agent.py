@@ -466,10 +466,41 @@ def test_provider_selection(sample_toolkit_data):
 # Test 17: Separate model configuration
 # ----------------------------------------------------------------------
 def test_separate_model_configuration(sample_toolkit_data):
-    with patch.dict("os.environ", {"INVESTIGATOR_MODEL": "meta-llama/llama-3.3-70b-instruct", "VERIFIER_MODEL": "gemini-2.5-flash"}):
-        orch = MultiAgentOrchestrator(toolkit=sample_toolkit_data, provider="demo")
+    """
+    Each role takes its own model when both roles run against a real provider.
+
+    LLM_PROVIDER is cleared because the shared conftest fixture pins it to demo,
+    and demo is a hard kill switch that overrides role providers by design.
+    """
+    with patch.dict("os.environ", {
+        "LLM_PROVIDER": "",
+        "INVESTIGATOR_PROVIDER": "openrouter",
+        "INVESTIGATOR_API_KEY": "sk-or-v1-dummykey12345678901234567890",
+        "INVESTIGATOR_MODEL": "meta-llama/llama-3.3-70b-instruct",
+        "VERIFIER_PROVIDER": "gemini",
+        "VERIFIER_API_KEY": "AIzaSyDummyKey12345678901234567890",
+        "VERIFIER_MODEL": "gemini-2.5-flash",
+    }):
+        orch = MultiAgentOrchestrator(toolkit=sample_toolkit_data)
         assert getattr(orch.investigator_llm, "model", None) == "meta-llama/llama-3.3-70b-instruct"
         assert getattr(orch.verifier_llm, "model", None) == "gemini-2.5-flash"
+
+
+def test_demo_mode_ignores_real_model_names(sample_toolkit_data):
+    """
+    A demo run must not be labelled with a model it never called.
+
+    Env model overrides are deliberately dropped when a role resolves to demo,
+    so persisted run metadata can never attribute rule-based emulator output to
+    a real model.
+    """
+    with patch.dict("os.environ", {
+        "INVESTIGATOR_MODEL": "meta-llama/llama-3.3-70b-instruct",
+        "VERIFIER_MODEL": "gemini-2.5-flash",
+    }):
+        orch = MultiAgentOrchestrator(toolkit=sample_toolkit_data, provider="demo")
+        assert getattr(orch.investigator_llm, "model", None) == "demo"
+        assert getattr(orch.verifier_llm, "model", None) == "demo"
 
 
 # ----------------------------------------------------------------------
