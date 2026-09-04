@@ -112,12 +112,12 @@ def test_provider_and_model_names_appear():
     buf = io.StringIO()
     tracer = AgentTracer(enabled=True, output_stream=buf)
 
-    tracer.agent_started("Investigator", "GROK", "grok-beta")
+    tracer.agent_started("Investigator", "OPENROUTER", "llama-3.3-70b")
     tracer.verifier_review_started("GEMINI", "gemini-2.5-flash")
 
     out = buf.getvalue()
-    assert "[INVESTIGATOR | GROK]" in out
-    assert "Model: grok-beta" in out
+    assert "[INVESTIGATOR | OPENROUTER]" in out
+    assert "Model: llama-3.3-70b" in out
     assert "[VERIFIER | GEMINI]" in out
     assert "Model: gemini-2.5-flash" in out
 
@@ -129,7 +129,7 @@ def test_tool_calls_and_results_appear():
     buf = io.StringIO()
     tracer = AgentTracer(enabled=True, output_stream=buf)
 
-    tracer.tool_call_started("Investigator", "GROK", "get_transaction", {"transaction_id": "TXN003"})
+    tracer.tool_call_started("Investigator", "OPENROUTER", "get_transaction", {"transaction_id": "TXN003"})
     tracer.tool_result("get_transaction", {
         "payment": {"amount": 14500},
         "ledger": {"gross_amount": 14500},

@@ -42,7 +42,6 @@ export default function SettingsView({ settings, onUpdateSettings, metrics }) {
                 <option value="">Server Default (from .env)</option>
                 <option value="gemini">Gemini API</option>
                 <option value="openrouter">OpenRouter</option>
-                <option value="grok">Grok / xAI</option>
                 <option value="demo">Demo Mode (Offline Fast)</option>
               </select>
               <p className="text-[10px] text-text-secondary/70 leading-snug pt-0.5">

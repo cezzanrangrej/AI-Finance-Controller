@@ -62,10 +62,6 @@ class Settings(BaseSettings):
     openrouter_model: str = Field(default="", validation_alias="OPENROUTER_MODEL")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", validation_alias="OPENROUTER_BASE_URL")
     
-    grok_api_key: str = Field(default="", validation_alias="GROK_API_KEY")
-    grok_model: str = Field(default="grok-2-latest", validation_alias="GROK_MODEL")
-    grok_base_url: str = Field(default="", validation_alias="GROK_BASE_URL")
-    
     investigator_provider: str = Field(default="", validation_alias="INVESTIGATOR_PROVIDER")
     investigator_api_key: str = Field(default="", validation_alias="INVESTIGATOR_API_KEY")
     investigator_model: str = Field(default="", validation_alias="INVESTIGATOR_MODEL")
