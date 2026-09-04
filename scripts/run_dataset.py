@@ -164,7 +164,7 @@ def print_phase1_report(
     breakdown: Dict[str, int] = metrics.get("breakdown", {})
 
     print("\n========================================")
-    print("AI FINANCE CONTROLLER")
+    print("RECONPILOT")
     print("DATASET RECONCILIATION")
     print("========================================\n")
     print(f"Dataset source:    {dir_name}")

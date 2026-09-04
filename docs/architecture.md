@@ -1,8 +1,8 @@
-# AI Finance Controller — Architecture & Design Philosophy
+# ReconPilot — Architecture & Design Philosophy
 
 ## System Philosophy
 
-The AI Finance Controller is a production-shaped financial reconciliation engine designed to automate complex, multi-source transaction matching across Payment Gateways, Enterprise Resource Planning (ERP) Ledgers, and Bank Settlement Statements.
+ReconPilot is a production-shaped financial reconciliation engine designed to automate complex, multi-source transaction matching across Payment Gateways, Enterprise Resource Planning (ERP) Ledgers, and Bank Settlement Statements.
 
 It combines a high-throughput, deterministic Phase 1 reconciliation engine with a parallel batch multi-agent LLM investigation system (Phase 2) to resolve exception cases, eliminate manual financial operations toil, and maintain an immutable audit trail.
 

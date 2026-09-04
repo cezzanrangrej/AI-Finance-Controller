@@ -422,7 +422,7 @@ def _execute_reconciliation_pipeline(
 
         # Terminal CLI Output Mirror
         print(f"\n========================================", flush=True)
-        print(f"AI FINANCE CONTROLLER — WEB RUN [{run_id}]", flush=True)
+        print(f"RECONPILOT — WEB RUN [{run_id}]", flush=True)
         print(f"========================================\n", flush=True)
         print(f"Records processed: {len(phase1_results)}", flush=True)
         print(f"Reconciled:        {phase1_metrics['reconciled_records']}", flush=True)

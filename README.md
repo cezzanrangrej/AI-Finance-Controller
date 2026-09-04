@@ -1,4 +1,4 @@
-# AI Finance Controller
+# ReconPilot
 
 > An enterprise financial reconciliation and exception-investigation engine that pairs **deterministic double-entry accounting rules (Python/Decimal)** with **parallel multi-agent LLM reasoning** to audit multi-source ledgers, prove settlement discrepancies mathematically, and safely escalate unresolved cases.
 
@@ -12,7 +12,7 @@ Traditional financial operations face two critical failure modes:
 - **Brittle Rule Scripts & Manual Audits** : Static rule systems break when fees or settlement timings deviate from hardcoded assumptions, pushing thousands of unmatched lines into manual spreadsheets where human investigation costs hours per case.
 - **Naive LLM Automation**: Generative models cannot be trusted with financial calculations. Standard LLMs suffer from floating-point inaccuracies, hallucinate fictitious balance adjustments, and lack auditability.
 
-**AI Finance Controller** solves this with a hybrid architecture: deterministic Python/`Decimal` arithmetic is strictly authoritative for balances and verification, while intelligent multi-agent LLMs are selectively deployed only to investigate context, correlate ambiguous adjustments, and draft audit trails.
+**ReconPilot** solves this with a hybrid architecture: deterministic Python/`Decimal` arithmetic is strictly authoritative for balances and verification, while intelligent multi-agent LLMs are selectively deployed only to investigate context, correlate ambiguous adjustments, and draft audit trails.
 
 ---
 
@@ -96,7 +96,7 @@ The system operates as a two-phase pipeline with strict separation between deter
 ## File Structure
 
 ```text
-AI-Finance-Controller/
+ReconPilot/
 ├── data/
 │   └── fixtures/               # Benchmark datasets (Datasets 01, 02, 03)
 ├── deploy/
