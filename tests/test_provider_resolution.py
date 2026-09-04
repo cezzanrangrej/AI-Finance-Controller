@@ -26,7 +26,6 @@ from src.agent.provider_resolution import (
 # Dummy credentials, shaped to pass the credential-vs-model validator.
 OR_KEY = "sk-or-v1-dummykey12345678901234567890"
 GEM_KEY = "AIzaSyDummyKey12345678901234567890"
-GROK_KEY = "xai-dummykey12345678901234567890"
 
 #: Every provider/credential variable, so patch.dict can start from a blank slate
 #: instead of inheriting the developer's real .env.
@@ -45,10 +44,6 @@ _ALL_PROVIDER_VARS = {
     "OPENROUTER_MODEL": "",
     "AGENTROUTER_API_KEY": "",
     "AGENTROUTER_MODEL": "",
-    "GROK_API_KEY": "",
-    "GROK_MODEL": "",
-    "XAI_API_KEY": "",
-    "XAI_MODEL": "",
 }
 
 
@@ -164,7 +159,7 @@ def test_missing_model_for_gateway_provider_degrades():
 
 
 def test_provider_with_default_model_does_not_need_one_set():
-    """Gemini and Grok carry sensible defaults, so a key alone suffices."""
+    """Gemini carries a sensible default model, so a key alone suffices."""
     with env(INVESTIGATOR_PROVIDER="gemini", INVESTIGATOR_API_KEY=GEM_KEY):
         role = resolve_role("investigator")
 
@@ -291,19 +286,10 @@ def test_warn_false_suppresses_logging(caplog):
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
-def test_normalize_provider_resolves_xai_alias():
-    assert normalize_provider("  XAI ") == "grok"
-    assert normalize_provider("GEMINI") == "gemini"
+def test_normalize_provider_trims_and_lowercases():
+    assert normalize_provider("  GEMINI ") == "gemini"
+    assert normalize_provider("OpenRouter") == "openrouter"
     assert normalize_provider(None) == ""
-
-
-def test_grok_accepts_xai_credential_variables():
-    with env(INVESTIGATOR_PROVIDER="xai", XAI_API_KEY=GROK_KEY, XAI_MODEL="grok-2-latest"):
-        role = resolve_role("investigator")
-
-    assert role.provider == "grok"
-    assert role.model == "grok-2-latest"
-    assert role.degraded is False
 
 
 def test_resolve_base_provider_prefers_explicit_argument():

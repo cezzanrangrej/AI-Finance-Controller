@@ -202,12 +202,10 @@ for the full resolution order.
 
 ## LLM Provider Support
 
-The system supports four provider configurations:
+The system supports three provider configurations:
 1. **Offline Demo Engine**: Local rule-based emulator requiring zero external API keys.
 2. **Google Gemini**: Direct integration via Gemini API (`gemini-2.5-flash`, `gemini-3.6-flash`).
 3. **OpenRouter**: Access to open-weights models (`meta-llama/llama-3.3-70b-instruct`, etc.).
-4. **Grok / xAI**: Direct integration for xAI models (`grok-2-latest`). `XAI_API_KEY` and
-   `XAI_MODEL` are accepted as aliases.
 
 `agentrouter` is also supported, reusing the OpenRouter client against a different base URL.
 
@@ -224,8 +222,8 @@ controllers share. For each role, the provider is taken from the first of:
 
 The key and model are then read from the role-scoped variables first
 (`INVESTIGATOR_API_KEY`, `VERIFIER_MODEL`, ...), falling back to the provider's shared
-variables (`GEMINI_API_KEY`, `OPENROUTER_MODEL`, ...). Gemini and Grok carry default
-models; OpenRouter and AgentRouter do not, so those need a model set explicitly.
+variables (`GEMINI_API_KEY`, `OPENROUTER_MODEL`, ...). Gemini carries a default model;
+OpenRouter and AgentRouter do not, so those need a model set explicitly.
 
 So all three of these are valid:
 
@@ -244,8 +242,9 @@ VERIFIER_API_KEY=...
 # c) Both -- role values win, LLM_PROVIDER covers the role left blank
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
-INVESTIGATOR_PROVIDER=grok
-GROK_API_KEY=...
+INVESTIGATOR_PROVIDER=openrouter
+INVESTIGATOR_API_KEY=...
+INVESTIGATOR_MODEL=meta-llama/llama-3.3-70b-instruct
 ```
 
 ### Offline Demo Mode
@@ -565,19 +564,19 @@ Access the application at `http://localhost:8000`.
 ### 1. Deterministic Phase 1 Dataset Run
 Reconcile an explicit dataset using only the deterministic Phase 1 engine:
 ```bash
-python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode phase1
+python scripts/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode phase1
 ```
 
 ### 2. Full Automatic Exception Investigation (Batch Mode)
 Reconcile a dataset and investigate all detected exceptions in parallel batches:
 ```bash
-python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode batch --batch-size 5
+python scripts/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode batch --batch-size 5
 ```
 
 ### 3. Batch Multi-Agent Investigation Mode
 Investigate exceptions using concurrent batches with dual-agent investigator and verifier consensus:
 ```bash
-python src/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode multi-agent --batch-size 5 --trace
+python scripts/run_dataset.py --data-dir "data/fixtures/dataset_03" --mode multi-agent --batch-size 5 --trace
 ```
 
 ### 4. Generate Executive Exception Report via CLI

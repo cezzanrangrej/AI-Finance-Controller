@@ -3,13 +3,33 @@ Live Agent Trace / Terminal Observability layer for AI Finance Controller.
 Provides clean, structured, real-time terminal observability of the multi-agent
 workflow, tool executions, deterministic finance engine calculations, independent
 verifier evaluations, and final controller safety policies.
+
+Two independent outputs are driven from the same events:
+
+* The terminal stream, gated by ``SHOW_AGENT_TRACE`` and filtered by
+  ``AGENT_TRACE_LEVEL`` (minimal | compact | verbose).
+* An optional structured ``event_sink`` callable, used by the API to forward the
+  same workflow events to the browser over SSE. The sink is deliberately
+  independent of ``enabled``: the frontend trace feed works whether or not the
+  operator wants terminal output.
 """
 
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from src.utils.formatters import format_currency
+
+
+#: Trace verbosity levels, least to most detailed. An event tagged with a level
+#: prints only when the configured level is at least as detailed.
+#:
+#:   minimal  -- run/transaction boundaries, final decisions, errors, summaries
+#:   compact  -- the above plus agent routing, verifier outcomes, evidence checks
+#:   verbose  -- the above plus every tool call, tool result, and arithmetic step
+TRACE_LEVELS: Dict[str, int] = {"minimal": 0, "compact": 1, "verbose": 2}
+
+DEFAULT_TRACE_LEVEL = "verbose"
 
 
 def parse_bool_env(var_name: str, default: bool = False) -> bool:
@@ -19,6 +39,18 @@ def parse_bool_env(var_name: str, default: bool = False) -> bool:
         return default
     val_clean = str(val).strip().lower()
     return val_clean in ("true", "1", "t", "yes", "y", "on")
+
+
+def normalize_trace_level(level: Optional[str]) -> str:
+    """
+    Resolves a trace level name, falling back to the most detailed level.
+
+    An unrecognised value falls back to 'verbose' rather than raising: a typo in
+    AGENT_TRACE_LEVEL should not abort a reconciliation run, and showing too much
+    is the safer failure mode for an observability layer.
+    """
+    name = (level or "").strip().lower()
+    return name if name in TRACE_LEVELS else DEFAULT_TRACE_LEVEL
 
 
 class AgentTracer:
@@ -32,6 +64,7 @@ class AgentTracer:
         enabled: Optional[bool] = None,
         level: Optional[str] = None,
         output_stream=None,
+        event_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         # Precedence: Explicit constructor arg > Environment variable > Default (False)
         if enabled is not None:
@@ -39,8 +72,54 @@ class AgentTracer:
         else:
             self.enabled = parse_bool_env("SHOW_AGENT_TRACE", False)
 
-        self.level = (level or os.getenv("AGENT_TRACE_LEVEL") or "verbose").strip().lower()
+        self.level = normalize_trace_level(level or os.getenv("AGENT_TRACE_LEVEL"))
         self.stream = output_stream or sys.stdout
+        self.event_sink = event_sink
+        self._seq = 0
+
+    # ------------------------------------------------------------------
+    # Level gating
+    # ------------------------------------------------------------------
+
+    def _visible(self, required_level: str = "verbose") -> bool:
+        """Returns True when terminal output is on and detailed enough for this event."""
+        if not self.enabled:
+            return False
+        return TRACE_LEVELS[self.level] >= TRACE_LEVELS[normalize_trace_level(required_level)]
+
+    # ------------------------------------------------------------------
+    # Structured event sink
+    # ------------------------------------------------------------------
+
+    def _sanitize_value(self, value: Any) -> Any:
+        """Recursively strips secrets from sink payload values."""
+        if isinstance(value, str):
+            return self._sanitize(value)
+        if isinstance(value, dict):
+            return {k: self._sanitize_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_value(v) for v in value]
+        return value
+
+    def _event(self, event_type: str, payload: Optional[Dict[str, Any]] = None, level: str = "verbose") -> None:
+        """
+        Forwards a structured workflow event to the sink, if one is attached.
+
+        Never raises: a failing sink (closed SSE stream, full queue) must not take
+        down the reconciliation run it is only observing.
+        """
+        if self.event_sink is None:
+            return
+        try:
+            self._seq += 1
+            self.event_sink({
+                "seq": self._seq,
+                "type": event_type,
+                "level": normalize_trace_level(level),
+                **self._sanitize_value(payload or {}),
+            })
+        except Exception:
+            pass
 
     def _sanitize(self, text: str) -> str:
         """Strips secrets, API keys, and authorization headers from trace text."""
@@ -70,7 +149,8 @@ class AgentTracer:
 
     def header(self, title: str = "AI FINANCE CONTROLLER — MULTI-AGENT TRACE") -> None:
         """Prints the top-level section header."""
-        if not self.enabled:
+        self._event("run_header", {"title": title}, level="minimal")
+        if not self._visible("minimal"):
             return
         self._print("\n" + "=" * 50)
         self._print(title)
@@ -78,7 +158,12 @@ class AgentTracer:
 
     def transaction_header(self, txn_id: str, exception_type: str, index: Optional[int] = None, total: Optional[int] = None) -> None:
         """Prints the start of a transaction investigation."""
-        if not self.enabled:
+        self._event(
+            "transaction_started",
+            {"transaction_id": txn_id, "exception_type": exception_type, "index": index, "total": total},
+            level="minimal",
+        )
+        if not self._visible("minimal"):
             return
         self._print("-" * 50)
         prefix = f"[{index}/{total}] " if index is not None and total is not None else ""
@@ -88,7 +173,8 @@ class AgentTracer:
 
     def orchestrator_routing(self, target: str = "Investigator", fast_path: bool = False) -> None:
         """Emits an orchestrator routing decision."""
-        if not self.enabled:
+        self._event("orchestrator_routing", {"target": target, "fast_path": fast_path}, level="compact")
+        if not self._visible("compact"):
             return
         self._print("\n[ORCHESTRATOR]")
         if fast_path:
@@ -98,14 +184,16 @@ class AgentTracer:
 
     def orchestrator_step_completed(self, step_name: str) -> None:
         """Emits orchestrator phase completion."""
-        if not self.enabled:
+        self._event("orchestrator_step_completed", {"step": step_name}, level="compact")
+        if not self._visible("compact"):
             return
         self._print("\n[ORCHESTRATOR]")
         self._print(f"✓ {step_name} completed")
 
     def orchestrator_policy_start(self) -> None:
         """Emits start of final decision policy application."""
-        if not self.enabled:
+        self._event("orchestrator_policy_start", {}, level="compact")
+        if not self._visible("compact"):
             return
         self._print("\n[ORCHESTRATOR]")
         self._print("→ Applying final decision policy")
@@ -116,7 +204,8 @@ class AgentTracer:
 
     def agent_started(self, role: str, provider: str, model: Optional[str] = None) -> None:
         """Emits the start of an agent's execution phase."""
-        if not self.enabled:
+        self._event("agent_started", {"role": role, "provider": provider, "model": model}, level="compact")
+        if not self._visible("compact"):
             return
         role_label = role.upper()
         prov_label = (provider or "DEMO").upper()
@@ -126,31 +215,33 @@ class AgentTracer:
 
     def tool_call_started(self, role: str, provider: str, tool_name: str, arguments: Dict[str, Any]) -> None:
         """Emits an investigator tool call with sanitized, concise arguments."""
-        if not self.enabled:
-            return
-        role_label = role.upper()
-        prov_label = (provider or "DEMO").upper()
         # Format safe operational arguments
         if isinstance(arguments, dict):
             safe_args_str = ", ".join(f"{k}={v}" for k, v in arguments.items() if not str(k).lower().endswith("key"))
         else:
             safe_args_str = str(arguments)
 
+        self._event(
+            "tool_call",
+            {"role": role, "provider": provider, "tool_name": tool_name, "arguments": safe_args_str},
+            level="verbose",
+        )
+        if not self._visible("verbose"):
+            return
+        role_label = role.upper()
+        prov_label = (provider or "DEMO").upper()
         self._print(f"[{role_label} | {prov_label}]")
         self._print(f"→ Calling {tool_name}({safe_args_str})")
 
-    def tool_result(self, tool_name: str, result: Any) -> None:
-        """Emits a concise, safe summary of a tool execution result."""
-        if not self.enabled:
-            return
-        self._print("[TOOL RESULT]")
+    def _tool_result_lines(self, tool_name: str, result: Any) -> List[str]:
+        """Builds the concise, safe summary lines for a tool execution result."""
         if not isinstance(result, dict):
-            self._print(f"← {str(result)[:100]}")
-            return
+            return [f"← {str(result)[:100]}"]
 
         if "error" in result:
-            self._print(f"← Error: {result['error']}")
-            return
+            return [f"← Error: {result['error']}"]
+
+        lines: List[str] = []
 
         if tool_name == "get_transaction":
             p = result.get("payment")
@@ -158,58 +249,75 @@ class AgentTracer:
             b = result.get("bank_records", [])
             a = result.get("adjustments", [])
             if p and p.get("amount") is not None:
-                self._print(f"← Payment: {format_currency(p.get('amount'))}")
+                lines.append(f"← Payment: {format_currency(p.get('amount'))}")
             if l and l.get("gross_amount") is not None:
-                self._print(f"← Ledger gross: {format_currency(l.get('gross_amount'))}")
+                lines.append(f"← Ledger gross: {format_currency(l.get('gross_amount'))}")
             if b:
                 amt = b[0].get("credited_amount")
-                self._print(f"← Bank credit: {format_currency(amt) if amt is not None else 'present'} ({len(b)} record{'s' if len(b) > 1 else ''})")
+                lines.append(f"← Bank credit: {format_currency(amt) if amt is not None else 'present'} ({len(b)} record{'s' if len(b) > 1 else ''})")
             else:
-                self._print("← Bank credit: None")
+                lines.append("← Bank credit: None")
             if a:
-                self._print(f"← Adjustments: {len(a)} found")
+                lines.append(f"← Adjustments: {len(a)} found")
 
         elif tool_name == "get_adjustments":
             count = result.get("count", 0)
             adjs = result.get("adjustments", [])
-            self._print(f"← {count} adjustment{'s' if count != 1 else ''} found")
+            lines.append(f"← {count} adjustment{'s' if count != 1 else ''} found")
             for adj in adjs:
                 typ = adj.get("adjustment_type", "ADJUSTMENT")
                 amt = adj.get("amount")
                 amt_str = format_currency(amt) if amt is not None else ""
-                self._print(f"← {typ}: {amt_str}")
+                lines.append(f"← {typ}: {amt_str}")
 
         elif tool_name == "get_payment_record":
             amt = result.get("amount")
-            self._print(f"← Payment amount: {format_currency(amt) if amt is not None else 'None'}")
+            lines.append(f"← Payment amount: {format_currency(amt) if amt is not None else 'None'}")
 
         elif tool_name == "get_ledger_record":
             gross = result.get("gross_amount")
             fee = result.get("fee")
-            self._print(f"← Ledger gross: {format_currency(gross)}, fee: {format_currency(fee)}")
+            lines.append(f"← Ledger gross: {format_currency(gross)}, fee: {format_currency(fee)}")
 
         elif tool_name == "get_bank_records":
             count = result.get("count", 0)
             records = result.get("bank_records", [])
-            self._print(f"← {count} bank record(s) found")
+            lines.append(f"← {count} bank record(s) found")
             for r in records:
                 amt = r.get("credited_amount")
-                self._print(f"← Credit: {format_currency(amt)}")
+                lines.append(f"← Credit: {format_currency(amt)}")
 
         elif tool_name == "check_for_duplicates":
             count = result.get("duplicate_count", 0)
             is_dup = result.get("is_duplicate", False)
-            self._print(f"← {count} bank record(s) checked")
-            self._print(f"← Duplicate: {'YES' if is_dup else 'NO'}")
+            lines.append(f"← {count} bank record(s) checked")
+            lines.append(f"← Duplicate: {'YES' if is_dup else 'NO'}")
 
         elif tool_name in ("calculate_expected_settlement", "calculate_adjusted_expected_settlement"):
             calc = result.get("calculation", "")
             adj_net = result.get("adjusted_expected_net") or result.get("expected_net")
-            self._print(f"← Calculation: {calc}")
+            lines.append(f"← Calculation: {calc}")
             if adj_net is not None:
-                self._print(f"← Result: {format_currency(adj_net)}")
+                lines.append(f"← Result: {format_currency(adj_net)}")
         else:
-            self._print(f"← {str(result)[:120]}")
+            lines.append(f"← {str(result)[:120]}")
+
+        return lines
+
+    def tool_result(self, tool_name: str, result: Any) -> None:
+        """Emits a concise, safe summary of a tool execution result."""
+        lines = self._tool_result_lines(tool_name, result)
+        is_error = isinstance(result, dict) and "error" in result
+        self._event(
+            "tool_result",
+            {"tool_name": tool_name, "lines": lines, "error": is_error},
+            level="verbose",
+        )
+        if not self._visible("verbose"):
+            return
+        self._print("[TOOL RESULT]")
+        for line in lines:
+            self._print(line)
 
     # ------------------------------------------------------------------
     # Deterministic Finance Engine Events
@@ -220,21 +328,23 @@ class AgentTracer:
         Emits authoritative deterministic financial engine calculations.
         Clearly demonstrates that Python (not LLM) performs financial arithmetic.
         """
-        if not self.enabled:
+        formatted = {
+            k: (format_currency(v) if isinstance(v, (int, float)) else str(v))
+            for k, v in items.items()
+        }
+        self._event("deterministic_calculation", {"items": formatted, "proven": proven}, level="verbose")
+        if not self._visible("verbose"):
             return
         self._print("\n[FINANCE ENGINE | PYTHON]")
-        for k, v in items.items():
-            if isinstance(v, (int, float)):
-                v_str = format_currency(v)
-            else:
-                v_str = str(v)
+        for k, v_str in formatted.items():
             self._print(f"→ {k}: {v_str}")
         if proven:
             self._print("✓ Equality proven")
 
     def evidence_sufficient(self, reasons: Optional[List[str]] = None) -> None:
         """Emits deterministic sufficiency check passing."""
-        if not self.enabled:
+        self._event("evidence_sufficient", {"reasons": list(reasons or [])}, level="compact")
+        if not self._visible("compact"):
             return
         self._print("\n[EVIDENCE CHECK | PYTHON]")
         self._print("✓ Sufficient deterministic evidence established")
@@ -244,7 +354,8 @@ class AgentTracer:
 
     def early_stop(self, role: str, tool_count: int, reason: str = "sufficient evidence established") -> None:
         """Emits early stopping event."""
-        if not self.enabled:
+        self._event("early_stop", {"role": role, "tool_count": tool_count, "reason": reason}, level="compact")
+        if not self._visible("compact"):
             return
         role_label = role.upper()
         self._print(f"\n[{role_label}]")
@@ -257,7 +368,8 @@ class AgentTracer:
 
     def verifier_review_started(self, provider: str, model: Optional[str] = None) -> None:
         """Emits the start of independent verification."""
-        if not self.enabled:
+        self._event("verifier_review_started", {"provider": provider, "model": model}, level="compact")
+        if not self._visible("compact"):
             return
         prov_label = (provider or "DEMO").upper()
         self._print(f"\n[VERIFIER | {prov_label}]")
@@ -267,7 +379,18 @@ class AgentTracer:
 
     def verifier_review_result(self, provider: str, verified: bool, decision: str, reason: str, contradictions: Optional[List[str]] = None) -> None:
         """Emits the outcome of verifier evaluation."""
-        if not self.enabled:
+        self._event(
+            "verifier_review_result",
+            {
+                "provider": provider,
+                "verified": verified,
+                "decision": decision,
+                "reason": reason,
+                "contradictions": list(contradictions or []),
+            },
+            level="compact",
+        )
+        if not self._visible("compact"):
             return
         prov_label = (provider or "DEMO").upper()
         self._print(f"\n[VERIFIER | {prov_label}]")
@@ -296,7 +419,20 @@ class AgentTracer:
         reason: Optional[str] = None,
     ) -> None:
         """Emits the final controller decision and disagreement breakdown."""
-        if not self.enabled:
+        self._event(
+            "final_decision",
+            {
+                "investigator_decision": investigator_dec,
+                "verifier_decision": verifier_dec,
+                "proof_pass": proof_pass,
+                "final_decision": final_decision,
+                "resolution_type": resolution_type,
+                "resolution_source": resolution_source,
+                "reason": reason,
+            },
+            level="minimal",
+        )
+        if not self._visible("minimal"):
             return
         self._print("\n[FINAL CONTROLLER]")
         self._print(f"Investigator: {investigator_dec}")
@@ -324,7 +460,19 @@ class AgentTracer:
         error_type: Optional[str] = None,
     ) -> None:
         """Emits a sanitized provider error event."""
-        if not self.enabled:
+        self._event(
+            "provider_error",
+            {
+                "role": role,
+                "provider": provider,
+                "status": status,
+                "action": action,
+                "error_type": error_type,
+                "details": str(error_msg)[:150] if error_msg else None,
+            },
+            level="minimal",
+        )
+        if not self._visible("minimal"):
             return
         prov_label = (provider or "UNKNOWN").upper()
         self._print(f"\n[PROVIDER ERROR | {prov_label}]")
@@ -353,7 +501,23 @@ class AgentTracer:
         resolution_source: str,
     ) -> None:
         """Prints a clean summary block at the conclusion of a transaction."""
-        if not self.enabled:
+        self._event(
+            "transaction_summary",
+            {
+                "transaction_id": txn_id,
+                "investigator_provider": investigator_prov,
+                "verifier_provider": verifier_prov,
+                "investigator_calls": inv_calls,
+                "verifier_calls": ver_calls,
+                "model_interactions": model_interactions,
+                "latency_sec": round(latency_sec, 4),
+                "tokens": tokens,
+                "final_decision": final_decision,
+                "resolution_source": resolution_source,
+            },
+            level="compact",
+        )
+        if not self._visible("compact"):
             return
         self._print("\n" + "-" * 50)
         self._print("TRANSACTION SUMMARY")
@@ -384,7 +548,22 @@ class AgentTracer:
         total_tokens: Optional[int],
     ) -> None:
         """Prints an aggregate multi-agent run summary block."""
-        if not self.enabled:
+        self._event(
+            "run_summary",
+            {
+                "cases_processed": cases_processed,
+                "auto_resolved": auto_resolved,
+                "human_review": human_review,
+                "not_evaluated": not_evaluated,
+                "investigator_calls": investigator_calls,
+                "verifier_calls": verifier_calls,
+                "total_interactions": total_interactions,
+                "average_latency": round(average_latency, 4),
+                "total_tokens": total_tokens,
+            },
+            level="minimal",
+        )
+        if not self._visible("minimal"):
             return
         self._print("\n" + "=" * 50)
         self._print("MULTI-AGENT RUN SUMMARY")

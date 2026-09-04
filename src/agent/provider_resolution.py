@@ -34,10 +34,11 @@ logger = logging.getLogger(__name__)
 DEMO = "demo"
 
 #: Providers accepted in LLM_PROVIDER / INVESTIGATOR_PROVIDER / VERIFIER_PROVIDER.
-VALID_PROVIDERS: Tuple[str, ...] = ("demo", "gemini", "openrouter", "agentrouter", "grok")
+VALID_PROVIDERS: Tuple[str, ...] = ("demo", "gemini", "openrouter", "agentrouter")
 
-#: Provider aliases normalised before resolution ("xai" is Grok's legacy name).
-_PROVIDER_ALIASES: Dict[str, str] = {"xai": "grok"}
+#: Provider aliases normalised before resolution. Empty for now; kept as the single
+#: place to add one, since every call path funnels through normalize_provider().
+_PROVIDER_ALIASES: Dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -70,12 +71,6 @@ _PROVIDER_SPECS: Dict[str, _ProviderSpec] = {
         model_vars=("AGENTROUTER_MODEL",),
         default_model="",
         model_required=True,
-    ),
-    "grok": _ProviderSpec(
-        key_vars=("GROK_API_KEY", "XAI_API_KEY"),
-        model_vars=("GROK_MODEL", "XAI_MODEL"),
-        default_model="grok-2-latest",
-        model_required=False,
     ),
 }
 
@@ -202,7 +197,7 @@ def _infer_provider_from_credentials(role: str) -> str:
         # OpenAI-compatible gateways; OpenRouter is the documented default.
         return "openrouter"
 
-    for candidate in ("openrouter", "gemini", "grok"):
+    for candidate in ("openrouter", "gemini"):
         spec = _PROVIDER_SPECS[candidate]
         if not _first_env(*spec.key_vars):
             continue

@@ -16,6 +16,7 @@ from decimal import Decimal
 from src.agent.evaluator import evaluate_agent_decisions
 from src.agent.schemas import AgentDecision
 from src.agent.tools import FinancialToolkit
+from src.agent.trace import AgentTracer
 from src.agent.provider_resolution import ProviderResolution, resolve_providers
 from src.api.schemas import DataIntegrityDiagnosticResponse, DataIntegrityRecord, RunSummaryResponse
 from src.db.database import SessionLocal, get_db, init_db
@@ -373,7 +374,15 @@ def _execute_reconciliation_pipeline(
         from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
         from src.agent.batch_partitioner import partition_exceptions_balanced
 
-        batch_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
+        # The tracer's event sink forwards each agent-workflow step to the SSE
+        # stream, so the browser sees the same trace the terminal does. Terminal
+        # output stays governed by SHOW_AGENT_TRACE; the sink is independent of it.
+        agent_tracer = AgentTracer(
+            event_sink=(lambda ev: event_callback({"event": "agent_trace", **ev})) if event_callback else None,
+        )
+        batch_agent = BatchMultiAgentController(
+            toolkit=toolkit, resolution=resolution, tracer=agent_tracer
+        )
         effective_batch_size = max(1, min(int(batch_size or 5), 10))
         chunks = partition_exceptions_balanced(exceptions, batch_size=effective_batch_size) if exceptions else []
 

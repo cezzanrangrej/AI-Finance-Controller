@@ -471,15 +471,12 @@ class LLMClient:
         selected_provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
         env_or_key = (api_key or os.getenv("OPENROUTER_API_KEY") or "").strip()
         env_gem_key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
-        env_grok_key = (api_key or os.getenv("INVESTIGATOR_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
 
         if not selected_provider:
             if env_or_key and os.getenv("OPENROUTER_MODEL"):
                 selected_provider = "openrouter"
             elif env_gem_key:
                 selected_provider = "gemini"
-            elif env_grok_key:
-                selected_provider = "grok"
             else:
                 selected_provider = "demo"
 
@@ -518,23 +515,6 @@ class LLMClient:
             from src.agent.gemini_client import GeminiLLMClient
             client = GeminiLLMClient(api_key=gem_key, model=gem_model)
             client.provider_name = "gemini"
-            return client
-
-        elif selected_provider == "grok" or selected_provider == "xai":
-            grok_key = (api_key or env_grok_key).strip() if (api_key or env_grok_key) else ""
-            if not grok_key:
-                raise ValueError(
-                    "INVESTIGATOR_API_KEY / GROK_API_KEY is missing. "
-                    "Set INVESTIGATOR_API_KEY in environment or configure provider=demo for Demo Mode."
-                )
-            grok_model = (model or os.getenv("INVESTIGATOR_MODEL") or os.getenv("GROK_MODEL") or "grok-2-latest").strip()
-            if not grok_model:
-                raise ValueError("INVESTIGATOR_MODEL is missing.")
-            validate_model_not_key("grok", grok_model)
-
-            from src.agent.grok_client import GrokLLMClient
-            client = GrokLLMClient(api_key=grok_key, model=grok_model)
-            client.provider_name = "grok"
             return client
 
         elif selected_provider == "agentrouter":
@@ -577,7 +557,7 @@ class LLMClient:
 
         else:
             raise ValueError(
-                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', 'openrouter', 'agentrouter', or 'grok'."
+                f"Unsupported LLM_PROVIDER '{selected_provider}'. Valid options are 'demo', 'gemini', 'openrouter', or 'agentrouter'."
             )
 
 
