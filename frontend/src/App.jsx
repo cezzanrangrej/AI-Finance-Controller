@@ -3,9 +3,7 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import KPICards from './components/KPICards';
 import ResolutionBars from './components/ResolutionBars';
-import ExceptionChart from './components/ExceptionChart';
 import ReconciliationTable from './components/ReconciliationTable';
-import HumanReviewSection from './components/HumanReviewSection';
 import EvaluationPanel from './components/EvaluationPanel';
 import DataSourcesSection from './components/DataSourcesSection';
 import RunProgressPanel from './components/RunProgressPanel';
@@ -19,7 +17,7 @@ import SettingsView from './views/SettingsView';
 import { useActiveRun } from './hooks/useActiveRun';
 import { useReconciliationRun } from './hooks/useReconciliationRun';
 
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Database } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -38,9 +36,6 @@ export default function App() {
     ledger: null,
     bank: null,
     adjustments: null,
-    // Optional scoring key, not a data source. Supplied, the run reports
-    // measured accuracy; omitted, the accuracy fields come back as N/A.
-    groundTruth: null,
   });
 
   // Custom Hook: Single source of truth for active run data
@@ -63,6 +58,7 @@ export default function App() {
   const {
     workflowState,
     progressState,
+    streamingState,
     notification,
     setNotification,
     error: runError,
@@ -83,6 +79,14 @@ export default function App() {
 
   const displayedError = runError || activeRunError;
 
+  // A run is in flight (or has just settled) in this session.
+  const isRunInFlight = Boolean(progressState?.stage && progressState.stage !== 'READY');
+
+  // Whether there are results to show at all. The dashboard's statistics
+  // surfaces stay unmounted until this is true, so a fresh load shows the upload
+  // form and nothing else instead of the figures of some previous run.
+  const hasRunResults = Boolean(activeRunId && metrics);
+
   return (
     <div className="min-h-screen bg-surface-alt flex text-text antialiased font-sans">
       {/* Sidebar Navigation */}
@@ -97,7 +101,6 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 transition-all duration-200">
         <Header
           activeRunId={activeRunId}
-          onRunReconciliation={handleRunReconciliation}
           workflowState={workflowState}
           progressState={progressState}
           datasetSource={datasetSourceLabel}
@@ -149,37 +152,53 @@ export default function App() {
                 workflowState={workflowState}
               />
 
-              {/* 2. REAL-TIME RECONCILIATION PROGRESS PANEL */}
+              {/* 2. REAL-TIME RECONCILIATION PROGRESS PANEL
+                  Renders nothing until a run starts. */}
               <RunProgressPanel progressState={progressState} />
 
-              {/* 2. PROGRESSIVE EXECUTION & COMPACT RESULTS TRACKER */}
-              <EvaluationPanel
-                metrics={metrics}
-                workflowState={workflowState}
-                onRetry={handleRunReconciliation}
-              />
+              {/* Everything below reports on a run. Until one has produced
+                  results in this session there is nothing to report, so the
+                  panels stay unmounted rather than filling the dashboard with
+                  zeroes and "no data" placeholders. */}
+              {!hasRunResults && !isRunInFlight && (
+                <div className="bg-background border border-border rounded-lg p-10 text-center shadow-xs">
+                  <Database className="h-6 w-6 text-text-secondary/50 mx-auto" />
+                  <p className="text-sm font-semibold text-text mt-3">No reconciliation data yet</p>
+                  <p className="text-xs text-text-secondary mt-1.5 max-w-md mx-auto leading-relaxed">
+                    Upload your Payments, Ledger and Bank CSVs above and run a reconciliation.
+                    The metrics, exception breakdown and audit ledger for that dataset will appear here.
+                  </p>
+                </div>
+              )}
 
-              {/* 3. TOP SUMMARY KPI CARDS */}
-              <KPICards metrics={metrics} />
+              {/* 3. PROGRESSIVE EXECUTION & COMPACT RESULTS TRACKER
+                  Also carries the live/failed banners, so it is mounted for the
+                  duration of a run and not only once metrics exist. */}
+              {(hasRunResults || isRunInFlight) && (
+                <EvaluationPanel
+                  metrics={metrics}
+                  streamingState={streamingState}
+                  workflowState={workflowState}
+                  onRetry={handleRunReconciliation}
+                />
+              )}
 
-              {/* 4. AI RESOLUTION BREAKDOWN */}
-              <ResolutionBars metrics={metrics} />
+              {hasRunResults && (
+                <>
+                  {/* 4. TOP SUMMARY KPI CARDS */}
+                  <KPICards metrics={metrics} />
 
-              {/* 5. EXCEPTION DISTRIBUTION CHART */}
-              <ExceptionChart metrics={metrics} />
+                  {/* 5. AI RESOLUTION BREAKDOWN */}
+                  <ResolutionBars metrics={metrics} />
 
-              {/* 6. MAIN RECONCILIATION OPERATIONAL LEDGER TABLE */}
-              <ReconciliationTable
-                transactions={transactions}
-                exceptions={exceptions}
-                onSelectTransaction={inspectTransaction}
-              />
-
-              {/* 7. ESCALATED EXCEPTIONS FOR HUMAN REVIEW */}
-              <HumanReviewSection
-                exceptions={exceptions}
-                onSelectTransaction={inspectTransaction}
-              />
+                  {/* 6. MAIN RECONCILIATION OPERATIONAL LEDGER TABLE */}
+                  <ReconciliationTable
+                    transactions={transactions}
+                    exceptions={exceptions}
+                    onSelectTransaction={inspectTransaction}
+                  />
+                </>
+              )}
             </>
           )}
 
@@ -197,6 +216,44 @@ export default function App() {
                 workflowState === 'UPLOADING'
               }
             />
+          )}
+
+          {/* The sidebar advertises Data Sources and Evaluations; without these
+              branches selecting either rendered an empty main area, and the
+              "upload your CSVs first" redirect in useReconciliationRun landed
+              the user on that blank screen instead of the upload form. */}
+          {activeTab === 'datasources' && (
+            <>
+              <DataSourcesSection
+                files={files}
+                setFiles={setFiles}
+                onRunReconciliation={handleRunReconciliation}
+                workflowState={workflowState}
+              />
+              <RunProgressPanel progressState={progressState} />
+            </>
+          )}
+
+          {activeTab === 'evaluations' && (
+            hasRunResults || isRunInFlight ? (
+              <EvaluationPanel
+                metrics={metrics}
+                streamingState={streamingState}
+                workflowState={workflowState}
+                onRetry={handleRunReconciliation}
+              />
+            ) : (
+              // Without a run the panel's own `?? 0` fallbacks render a full set
+              // of 0.0% figures, which reads as a measured result rather than as
+              // the absence of one.
+              <div className="bg-background border border-border rounded-lg p-10 text-center shadow-xs">
+                <Database className="h-6 w-6 text-text-secondary/50 mx-auto" />
+                <p className="text-sm font-semibold text-text mt-3">Nothing evaluated yet</p>
+                <p className="text-xs text-text-secondary mt-1.5 max-w-md mx-auto leading-relaxed">
+                  Run a reconciliation from Data Sources to inspect live throughput, exception metrics, and audit ledger details.
+                </p>
+              </div>
+            )
           )}
 
           {activeTab === 'exceptions' && (

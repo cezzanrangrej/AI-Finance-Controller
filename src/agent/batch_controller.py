@@ -8,11 +8,13 @@ per-case fallback to individual agent investigation if batch parsing fails.
 
 from datetime import datetime, timezone
 import json
+import logging
 import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.agent.json_utils import repair_and_parse_json
 from src.agent.controller import (
     AgentController,
     EvidenceState,
@@ -28,6 +30,8 @@ from src.agent.schemas import (
     BatchInvestigationLog,
 )
 from src.agent.tools import FinancialToolkit
+
+logger = logging.getLogger(__name__)
 
 
 def prefetch_case_evidence(
@@ -160,17 +164,7 @@ class BatchAgentController:
             choice = response.choices[0]
             raw_content = choice.message.content or ""
 
-            cleaned = raw_content.strip()
-            if "```" in cleaned:
-                match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-                if match:
-                    cleaned = match.group(1)
-            if "{" in cleaned and "}" in cleaned:
-                start = cleaned.find("{")
-                end = cleaned.rfind("}") + 1
-                cleaned = cleaned[start:end]
-
-            parsed_data = json.loads(cleaned)
+            parsed_data = repair_and_parse_json(raw_content)
             if isinstance(parsed_data, dict) and "decisions" in parsed_data:
                 for d in parsed_data.get("decisions", []):
                     if isinstance(d, dict) and not d.get("evidence"):
@@ -185,9 +179,19 @@ class BatchAgentController:
                     dec.confidence = max(0.0, min(1.0, float(dec.confidence)))
                     batch_decisions_map[tid] = dec
 
-        except Exception:
-            # Batch call failed or produced malformed JSON; all transactions fall back
-            pass
+        except Exception as batch_err:
+            # Batch call failed or produced malformed JSON; all transactions fall
+            # back to individual investigation below. Logged rather than
+            # swallowed: silently discarding this made a provider outage look
+            # identical to a batch of unparseable responses.
+            logger.warning(
+                "Batch %s failed (%s: %s); %d case(s) will fall back to individual investigation. Snippet: %r",
+                batch_id,
+                type(batch_err).__name__,
+                batch_err,
+                len(expected_txn_ids),
+                raw_content[-200:] if raw_content else "",
+            )
 
         # Step 2: Check for missing transactions and execute individual fallback
         for tid in expected_txn_ids:

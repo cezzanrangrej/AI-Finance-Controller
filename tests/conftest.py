@@ -10,6 +10,8 @@ from src.agent.tools import FinancialToolkit
 def set_demo_provider_for_tests(monkeypatch):
     """Ensures standard automated pytest unit tests execute deterministically in Demo mode."""
     monkeypatch.setenv("LLM_PROVIDER", "demo")
+    monkeypatch.setenv("INVESTIGATOR_PROVIDER", "demo")
+    monkeypatch.setenv("VERIFIER_PROVIDER", "demo")
 
 
 @pytest.fixture

@@ -35,17 +35,16 @@ export default function ExceptionDetailModal({ detail, onClose }) {
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-background border border-border rounded-xl w-full max-w-2xl shadow-xl overflow-hidden my-6">
-        
+
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-surface">
           <div>
             <div className="flex items-center gap-2.5">
               <h2 className="text-base font-bold font-mono text-text">{transaction_id}</h2>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${
-                isReconciled
-                  ? 'bg-accent-green/10 text-text border-accent-green/30'
-                  : 'bg-accent-coral/10 text-text border-accent-coral/30'
-              }`}>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${isReconciled
+                ? 'bg-accent-green/10 text-text border-accent-green/30'
+                : 'bg-accent-coral/10 text-text border-accent-coral/30'
+                }`}>
                 {status}
               </span>
             </div>
@@ -64,14 +63,14 @@ export default function ExceptionDetailModal({ detail, onClose }) {
 
         {/* Modal Body */}
         <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
-          
+
           {/* Multi-Source Financial Snapshot */}
           <div>
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block mb-2.5">
               Multi-Source Financial Snapshot
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
-              
+
               {/* Payment Gateway */}
               <div className="bg-surface border border-border p-3 rounded-lg flex flex-col justify-between">
                 <span className="text-[10px] font-medium text-text-secondary/60 uppercase tracking-wider">Payment Gateway</span>
@@ -185,11 +184,10 @@ export default function ExceptionDetailModal({ detail, onClose }) {
                   <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
                     AI Decision
                   </span>
-                  <span className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                    agent_investigation.decision === 'AUTO_RESOLVED'
-                      ? 'bg-accent-green/10 text-text border-accent-green/30'
-                      : 'bg-accent-coral/10 text-text border-accent-coral/30'
-                  }`}>
+                  <span className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold border ${agent_investigation.decision === 'AUTO_RESOLVED'
+                    ? 'bg-accent-green/10 text-text border-accent-green/30'
+                    : 'bg-accent-coral/10 text-text border-accent-coral/30'
+                    }`}>
                     {agent_investigation.decision}
                   </span>
                 </div>
@@ -260,7 +258,7 @@ export default function ExceptionDetailModal({ detail, onClose }) {
                     </div>
                     <div className="bg-surface p-2 rounded border border-border">
                       <span className="text-[10px] text-text-secondary/60 block font-sans">Resolution Type</span>
-                      <span className="font-semibold text-text truncate block">{agent_investigation.resolution_type || 'NONE'}</span>
+                      <span className="font-semibold text-text truncate block">{agent_investigation.resolution_type || 'None'}</span>
                     </div>
                     <div className="bg-surface p-2 rounded border border-border">
                       <span className="text-[10px] text-text-secondary/60 block font-sans">Evidence Scope</span>

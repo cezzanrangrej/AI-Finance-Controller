@@ -418,9 +418,14 @@ def run_llm_mode(
         evaluated_count = len([d for d in decisions if d.decision != "NOT_EVALUATED"])
         not_eval_count = len(decisions) - evaluated_count
 
-        accuracy = (correct_count / evaluated_count * 100) if evaluated_count > 0 else 0.0
-        precision = (auto_correct_count / actual_auto_count * 100) if actual_auto_count > 0 else 100.0
-        recall = (auto_correct_count / gt_auto_count * 100) if gt_auto_count > 0 else 100.0
+        # A zero denominator means unmeasured, not perfect and not zero.
+        # precision/recall previously defaulted to 100.0 when nothing had been
+        # auto-resolved (or nothing was auto-resolvable), which reported a
+        # flawless score for a run that had made no measurable claim at all.
+        accuracy = (correct_count / evaluated_count * 100) if evaluated_count > 0 else None
+        precision = (auto_correct_count / actual_auto_count * 100) if actual_auto_count > 0 else None
+        recall = (auto_correct_count / gt_auto_count * 100) if gt_auto_count > 0 else None
+        fmt = lambda v: "N/A (not measured)" if v is None else f"{v:.2f}%"
 
         print("========================================")
         print("EVALUATION SUMMARY")
@@ -428,13 +433,13 @@ def run_llm_mode(
         print(f"Cases evaluated:          {evaluated_count}")
         print(f"Correct:                  {correct_count}")
         print(f"Incorrect:                {incorrect_count}")
-        print(f"Decision accuracy:        {accuracy:.2f}%\n")
+        print(f"Decision accuracy:        {fmt(accuracy)}\n")
         print(f"Ground-truth AUTO_RESOLVED: {gt_auto_count}")
         print(f"Actual AUTO_RESOLVED:       {actual_auto_count}")
         print(f"Ground-truth HUMAN_REVIEW:  {gt_human_count}")
         print(f"Actual HUMAN_REVIEW:        {actual_human_count}\n")
-        print(f"Auto-resolution precision:  {precision:.2f}%")
-        print(f"Auto-resolution recall:     {recall:.2f}%")
+        print(f"Auto-resolution precision:  {fmt(precision)}")
+        print(f"Auto-resolution recall:     {fmt(recall)}")
         print(f"Not evaluated:            {not_eval_count}")
         print(f"Processing time:          {elapsed:.4f} sec")
         print("\n========================================\n")

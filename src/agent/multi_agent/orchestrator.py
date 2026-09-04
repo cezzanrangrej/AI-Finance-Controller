@@ -179,8 +179,10 @@ class MultiAgentOrchestrator:
         self.tracer.orchestrator_step_completed("Investigator")
         investigator_calls = getattr(self.investigator, "last_successful_calls", 0)
 
-        # Check for provider failure on investigator
-        if proposal.confidence == 0.0 and "Provider" in (proposal.reason or ""):
+        # Check for provider failure on investigator. Keyed off an explicit flag
+        # set by the Investigator's own exception handler, not a substring of the
+        # reason text.
+        if getattr(proposal, "provider_failed", False):
             decision = AgentDecision(
                 transaction_id=txn_id,
                 decision="NOT_EVALUATED",
@@ -231,8 +233,8 @@ class MultiAgentOrchestrator:
         self.tracer.orchestrator_step_completed("Verifier")
         verifier_calls = getattr(self.verifier, "last_successful_calls", 0)
 
-        # Check for provider failure on verifier
-        if verification.confidence == 0.0 and "provider" in verification.reason.lower():
+        # Check for provider failure on verifier (explicit flag, not substring)
+        if getattr(verification, "provider_failed", False):
             if is_proven and proof_data:
                 # Deterministic proof overrides verifier technical error safely
                 decision = build_proven_adjustment_resolution(txn_id, exception_type, evidence, proof_data)

@@ -346,6 +346,8 @@ def evaluate_agent_decisions(
 
     total_completed = len(completed_decisions)
     correct_decisions = 0
+    labelled_cases = 0
+    unlabelled_cases = 0
 
     auto_resolved_total = 0
     auto_resolved_correct = 0
@@ -363,8 +365,14 @@ def evaluate_agent_decisions(
         expected_decision = gt.get("expected_phase2_decision")
 
         if not expected_decision or expected_decision == "N/A":
-            expected_decision = "HUMAN_REVIEW"
+            # No ground-truth label for this case. It is excluded from every
+            # denominator rather than scored against an assumed HUMAN_REVIEW,
+            # which previously credited every escalation as correct and charged
+            # every auto-resolution as a precision miss on unlabelled data.
+            unlabelled_cases += 1
+            continue
 
+        labelled_cases += 1
         is_correct = (agent_decision == expected_decision)
         if is_correct:
             correct_decisions += 1
@@ -413,8 +421,9 @@ def evaluate_agent_decisions(
             "phase1_labelled_records": 0,
         }
 
-    # An empty denominator means unmeasured, not perfect.
-    phase2_accuracy = (correct_decisions / total_completed * 100) if total_completed > 0 else None
+    # An empty denominator means unmeasured, not perfect. The accuracy
+    # denominator is the labelled subset, not every completed decision.
+    phase2_accuracy = (correct_decisions / labelled_cases * 100) if labelled_cases > 0 else None
     precision = (auto_resolved_correct / auto_resolved_total * 100) if auto_resolved_total > 0 else None
     recall = (auto_resolved_correct / gt_auto_resolvable * 100) if gt_auto_resolvable > 0 else None
 
@@ -431,6 +440,8 @@ def evaluate_agent_decisions(
         phase1_false_positives=p1["phase1_false_positives"],
         phase1_false_negatives=p1["phase1_false_negatives"],
         phase1_labelled_records=p1["phase1_labelled_records"],
+        phase2_labelled_cases=labelled_cases,
+        phase2_unlabelled_cases=unlabelled_cases,
         agent_total_decisions=total_completed,
         agent_correct_decisions=correct_decisions,
         auto_resolved_correct=auto_resolved_correct,

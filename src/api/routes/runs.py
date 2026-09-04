@@ -4,9 +4,13 @@ import json
 import logging
 import os
 import queue
+import random
+import shutil
+import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -31,8 +35,53 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
-# Active event queues for live streaming reconciliation runs
+# Active event queues for live streaming reconciliation runs.
+# Bounded: a client that never opens its stream would otherwise leave the queue
+# and every event the worker produced resident for the process lifetime.
 _ACTIVE_RUN_STREAMS: Dict[str, queue.Queue] = {}
+_MAX_TRACKED_STREAMS = 32
+
+#: How long an SSE generator waits for the next event before emitting a
+#: keep-alive comment.
+_STREAM_POLL_TIMEOUT_SEC = 30.0
+
+#: Consecutive keep-alives tolerated before the stream gives up (20 minutes).
+#: A single Phase-2 batch can legitimately be silent for minutes while the
+#: provider client sleeps out a rate-limit window, so the ceiling is generous --
+#: but it is a ceiling, so a worker that died without unwinding cannot leave the
+#: client heartbeating forever.
+_STREAM_MAX_IDLE_HEARTBEATS = 40
+
+
+def _register_stream(registry: Dict[str, queue.Queue], key: str) -> queue.Queue:
+    """
+    Registers an SSE event queue, evicting the oldest entries beyond the cap.
+
+    Streams are normally removed when the client consumes the terminal event,
+    but an abandoned run would otherwise leak its queue. dicts preserve
+    insertion order, so the first key is the oldest registration.
+    """
+    while len(registry) >= _MAX_TRACKED_STREAMS:
+        registry.pop(next(iter(registry)), None)
+    event_q: queue.Queue = queue.Queue()
+    registry[key] = event_q
+    return event_q
+
+
+def _assert_accounting_invariant(final_resolved: int, final_unresolved: int, total_records: int) -> None:
+    """
+    Enforces final_resolved + final_unresolved == total_records.
+
+    A bare `assert` is stripped by `python -O`, which would let a miscounted run
+    be persisted and reported as authoritative in exactly the deployment mode
+    where that matters most. Raising explicitly keeps the guarantee everywhere.
+    """
+    if final_resolved + final_unresolved != total_records:
+        raise RuntimeError(
+            "Accounting invariant violated: final_resolved "
+            f"({final_resolved}) + final_unresolved ({final_unresolved}) "
+            f"!= total_records ({total_records}); run not persisted."
+        )
 
 
 def _resolve_investigation_providers(provider: Optional[str] = None) -> ProviderResolution:
@@ -300,7 +349,15 @@ async def validate_csv_dataset(
             a_rows = _parse_uploaded_csv(a_bytes, adjustments.filename or "adjustments.csv", ["transaction_id", "adjustment_type", "amount"])
             status["sources"]["adjustments"] = {"records": len(a_rows), "valid": True, "filename": adjustments.filename}
         except Exception as e:
-            status["sources"]["adjustments"] = {"records": 0, "valid": False, "error": str(e.detail if isinstance(e, HTTPException) else e)}
+            # Adjustments are optional, but a *supplied* file that cannot be
+            # parsed makes the dataset unusable: /runs/upload parses it with the
+            # same helper and returns 400. This branch previously recorded the
+            # per-source error without setting status["valid"] = False, so
+            # validation passed and the subsequent upload was rejected.
+            detail = str(e.detail if isinstance(e, HTTPException) else e)
+            status["valid"] = False
+            status["errors"].append(detail)
+            status["sources"]["adjustments"] = {"records": 0, "valid": False, "error": detail}
     else:
         status["sources"]["adjustments"] = {"records": 0, "valid": True, "note": "Optional (None provided)"}
 
@@ -363,6 +420,21 @@ def _execute_reconciliation_pipeline(
 
         exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
 
+        # Terminal CLI Output Mirror
+        print(f"\n========================================", flush=True)
+        print(f"AI FINANCE CONTROLLER — WEB RUN [{run_id}]", flush=True)
+        print(f"========================================\n", flush=True)
+        print(f"Records processed: {len(phase1_results)}", flush=True)
+        print(f"Reconciled:        {phase1_metrics['reconciled_records']}", flush=True)
+        print(f"Exceptions:        {phase1_metrics['exception_records']}", flush=True)
+        print(f"Match rate:        {phase1_metrics['match_rate']:.2f}%\n", flush=True)
+        print(f"----------------------------------------", flush=True)
+        print(f"PHASE 1 EXCEPTION BREAKDOWN", flush=True)
+        print(f"----------------------------------------", flush=True)
+        for exc_type, count in sorted(phase1_metrics.get("breakdown", {}).items()):
+            print(f"  {exc_type:<30} {count}", flush=True)
+        print(f"========================================\n", flush=True)
+
         # Step 4: Phase 2 AI agent investigation via BatchMultiAgentController
         t_p2_start = time.time()
         toolkit = FinancialToolkit(payments_data, ledger_data, bank_data, adjustments_data)
@@ -385,6 +457,13 @@ def _execute_reconciliation_pipeline(
         )
         effective_batch_size = max(1, min(int(batch_size or 5), 10))
         chunks = partition_exceptions_balanced(exceptions, batch_size=effective_batch_size) if exceptions else []
+        max_parallel_workers = max(1, min(len(chunks), int(os.getenv("MAX_PARALLEL_BATCHES", "5")))) if chunks else 1
+
+        if chunks:
+            print(f"--- Investigating {len(exceptions)} exception(s) [MULTI-AGENT BATCH PARALLEL] ---", flush=True)
+            print(f"Batches: {len(chunks)} | Batch Size: {effective_batch_size} | Concurrency: {max_parallel_workers} | Provider: {resolution.provider_label}\n", flush=True)
+        else:
+            print("[Phase 2] No exceptions to investigate.", flush=True)
 
         # Step 5: Milestone — Phase 2 started
         if event_callback:
@@ -393,6 +472,10 @@ def _execute_reconciliation_pipeline(
                 "exception_count": len(exceptions),
                 "batch_count": len(chunks),
                 "batch_size": effective_batch_size,
+                "batch_details": [
+                    {"batch_number": idx + 1, "case_count": len(c)}
+                    for idx, c in enumerate(chunks)
+                ],
             })
 
         agent_decisions = []
@@ -403,20 +486,124 @@ def _execute_reconciliation_pipeline(
         degraded_cases = 0
         degraded_transaction_ids: List[str] = []
 
-        for i, chunk in enumerate(chunks):
+        batch_results_by_index: Dict[int, Any] = {}
+        progress_lock = threading.Lock()
+        completed_batches_count = 0
+
+        def _execute_single_chunk(i: int, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
+            """Execute a single batch chunk with rate-limit retry logic.
+
+            If the LLM provider raises LLMRateLimitError, this function retries
+            with jittered exponential backoff (1s, 2s, 4s, 8s base delays,
+            ±20% jitter).  If a Retry-After value is present on the exception,
+            that takes precedence over the computed delay.
+
+            On exhaustion (4 attempts), the chunk is routed as NOT_EVALUATED
+            through the existing fallback path — no cases are silently dropped.
+            """
+            from src.agent.rate_limit import LLMRateLimitError
+
+            RATE_LIMIT_MAX_RETRIES = 4
+            RATE_LIMIT_BASE_DELAYS = [1.0, 2.0, 4.0, 8.0]
+            JITTER_FACTOR = 0.20  # ±20%
+
+            chunk_tids = [c.get("transaction_id", "?") for c in chunk]
+            with progress_lock:
+                print(f"  [Batch {i + 1}/{len(chunks)}] Started investigating {len(chunk)} cases ({', '.join(chunk_tids)})...", flush=True)
+
+            if event_callback:
+                event_callback({
+                    "event": "phase2_batch_started",
+                    "batch_index": i + 1,
+                    "batch_total": len(chunks),
+                    "cases_in_batch": len(chunk),
+                })
+
+            t_batch_start = time.time()
             batch_log = None
-            try:
-                chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
-            except Exception as batch_err:
-                # The whole batch failed (provider outage, auth error, timeout).
-                # These cases were never assessed, so they are NOT_EVALUATED --
-                # not HUMAN_REVIEW. Labelling a system failure as a considered
-                # escalation would overstate what the agent actually did, and
-                # one decision per exception keeps the accounting invariant.
-                logger.warning(
-                    "Batch %d/%d failed entirely (%s); marking %d case(s) NOT_EVALUATED",
-                    i + 1, len(chunks), batch_err, len(chunk),
-                )
+            chunk_decisions = None
+
+            for rl_attempt in range(RATE_LIMIT_MAX_RETRIES):
+                try:
+                    local_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
+                    chunk_decisions, batch_log = local_agent.investigate_batch(chunk)
+                    break  # Success — exit retry loop
+
+                except LLMRateLimitError as rle:
+                    # Compute jittered backoff delay
+                    base_delay = RATE_LIMIT_BASE_DELAYS[min(rl_attempt, len(RATE_LIMIT_BASE_DELAYS) - 1)]
+                    if rle.retry_after is not None and rle.retry_after > 0:
+                        wait = rle.retry_after
+                    else:
+                        jitter = base_delay * JITTER_FACTOR * (2 * random.random() - 1)
+                        wait = base_delay + jitter
+                    wait = max(wait, 0.5)  # floor at 500ms
+
+                    with progress_lock:
+                        print(
+                            f"  [Batch {i + 1}/{len(chunks)}] ⚠ Rate limited "
+                            f"(attempt {rl_attempt + 1}/{RATE_LIMIT_MAX_RETRIES}, "
+                            f"provider={rle.provider}). "
+                            f"Retrying in {wait:.1f}s...",
+                            flush=True,
+                        )
+                    logger.warning(
+                        "Batch %d/%d rate-limited on attempt %d/%d (provider=%s, "
+                        "retry_after=%s). Sleeping %.2fs.",
+                        i + 1, len(chunks), rl_attempt + 1, RATE_LIMIT_MAX_RETRIES,
+                        rle.provider, rle.retry_after, wait,
+                    )
+
+                    # Emit SSE sub-status event for frontend visibility
+                    if event_callback:
+                        event_callback({
+                            "event": "rate_limited_retry",
+                            "batch_index": i + 1,
+                            "batch_total": len(chunks),
+                            "attempt": rl_attempt + 1,
+                            "max_attempts": RATE_LIMIT_MAX_RETRIES,
+                            "provider": rle.provider,
+                            "wait_seconds": round(wait, 2),
+                        })
+
+                    if rl_attempt < RATE_LIMIT_MAX_RETRIES - 1:
+                        time.sleep(wait)  # Non-blocking relative to sibling threads
+                    else:
+                        # Exhausted — fall through to NOT_EVALUATED below
+                        logger.error(
+                            "Batch %d/%d rate-limit retries exhausted after %d attempts. "
+                            "Marking %d case(s) NOT_EVALUATED.",
+                            i + 1, len(chunks), RATE_LIMIT_MAX_RETRIES, len(chunk),
+                        )
+
+                except Exception as batch_err:
+                    logger.warning(
+                        "Batch %d/%d failed entirely (%s); marking %d case(s) NOT_EVALUATED",
+                        i + 1, len(chunks), batch_err, len(chunk),
+                    )
+                    chunk_decisions = [
+                        AgentDecision(
+                            transaction_id=exc.get("transaction_id", "UNKNOWN"),
+                            decision="NOT_EVALUATED",
+                            exception_type=exc.get("reason", "UNKNOWN"),
+                            resolution_type="NONE",
+                            reason=(
+                                "Agent could not evaluate this case: batch investigation failed "
+                                f"({type(batch_err).__name__}). This is a system failure, not an "
+                                "assessment of the case."
+                            ),
+                            evidence=[f"Phase 1 exception: {exc.get('reason', 'UNKNOWN')}"],
+                            confidence=0.0,
+                            recommended_action="Re-run investigation; case has not been assessed.",
+                            resolution_source="INFRASTRUCTURE_FAILURE",
+                        )
+                        for exc in chunk
+                    ]
+                    break  # Non-rate-limit failure — no retry
+
+            # If chunk_decisions is still None after the retry loop, rate-limit
+            # retries were exhausted — route as NOT_EVALUATED.
+            if chunk_decisions is None:
                 chunk_decisions = [
                     AgentDecision(
                         transaction_id=exc.get("transaction_id", "UNKNOWN"),
@@ -424,20 +611,80 @@ def _execute_reconciliation_pipeline(
                         exception_type=exc.get("reason", "UNKNOWN"),
                         resolution_type="NONE",
                         reason=(
-                            "Agent could not evaluate this case: batch investigation failed "
-                            f"({type(batch_err).__name__}). This is a system failure, not an "
-                            "assessment of the case."
+                            "Agent could not evaluate this case: LLM provider rate limit "
+                            f"persisted after {RATE_LIMIT_MAX_RETRIES} retries. This is a "
+                            "system failure, not an assessment of the case."
                         ),
                         evidence=[f"Phase 1 exception: {exc.get('reason', 'UNKNOWN')}"],
                         confidence=0.0,
-                        recommended_action="Re-run investigation; case has not been assessed.",
-                        resolution_source="INFRASTRUCTURE_FAILURE",
+                        recommended_action="Re-run investigation after rate limit window expires.",
+                        resolution_source="RATE_LIMIT_EXHAUSTED",
                     )
                     for exc in chunk
                 ]
 
-            # Cases the agents genuinely could not assess, from either the
-            # whole-batch failure above or a per-case failure inside the batch.
+            batch_time_sec = max(time.time() - t_batch_start, 0.001)
+
+            with progress_lock:
+                for d in chunk_decisions:
+                    src_tag = f" [{d.resolution_source}]" if getattr(d, "resolution_source", None) else ""
+                    res_type = f" ({d.resolution_type})" if d.resolution_type and d.resolution_type != "NONE" else ""
+                    print(f"    -> {d.transaction_id}: {d.decision}{res_type}{src_tag}", flush=True)
+                print(f"  [Batch {i + 1}/{len(chunks)}] Completed in {batch_time_sec:.2f}s\n", flush=True)
+
+            return {
+                "batch_index": i,
+                "chunk": chunk,
+                "chunk_decisions": chunk_decisions,
+                "batch_log": batch_log,
+                "batch_time_sec": batch_time_sec,
+            }
+
+        if chunks:
+            with ThreadPoolExecutor(max_workers=max_parallel_workers) as executor:
+                futures = [executor.submit(_execute_single_chunk, i, chunk) for i, chunk in enumerate(chunks)]
+                for future in as_completed(futures):
+                    res = future.result()
+                    b_idx = res["batch_index"]
+                    chunk = res["chunk"]
+                    chunk_decisions = res["chunk_decisions"]
+                    batch_time_sec = res["batch_time_sec"]
+                    batch_results_by_index[b_idx] = res
+
+                    with progress_lock:
+                        completed_batches_count += 1
+                        for d in chunk_decisions:
+                            if d.decision == "AUTO_RESOLVED":
+                                cumulative_resolved += 1
+                            elif d.decision == "HUMAN_REVIEW":
+                                cumulative_human_review += 1
+                            else:
+                                cumulative_not_evaluated += 1
+
+                        # Step 6: Milestone — Phase 2 batch progress
+                        if event_callback:
+                            event_callback({
+                                "event": "phase2_batch_progress",
+                                "batch_index": b_idx + 1,
+                                "completed_batches": completed_batches_count,
+                                "batch_total": len(chunks),
+                                "cases_in_batch": len(chunk),
+                                "batch_time_sec": round(batch_time_sec, 2),
+                                "cumulative_resolved": cumulative_resolved,
+                                "cumulative_human_review": cumulative_human_review,
+                                "cumulative_not_evaluated": cumulative_not_evaluated,
+                            })
+
+        # Reassemble decisions and logs strictly in original chunk order for determinism
+        batch_logs = []
+        for i in range(len(chunks)):
+            res = batch_results_by_index[i]
+            chunk = res["chunk"]
+            chunk_decisions = res["chunk_decisions"]
+            batch_log = res["batch_log"]
+            if batch_log is not None:
+                batch_logs.append(batch_log)
+
             batch_degraded = (
                 getattr(batch_log, "not_evaluated_count", 0) if batch_log is not None else len(chunk)
             )
@@ -451,17 +698,7 @@ def _execute_reconciliation_pipeline(
 
             for d in chunk_decisions:
                 agent_decisions.append(d)
-                if d.decision == "AUTO_RESOLVED":
-                    cumulative_resolved += 1
-                elif d.decision == "HUMAN_REVIEW":
-                    cumulative_human_review += 1
-                else:
-                    cumulative_not_evaluated += 1
-
                 exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
-                # Real provenance: the toolkit methods the prefetch actually
-                # invoked for this case, and the real LLM interaction count
-                # (0 for cases settled by deterministic Decimal proof).
                 tools_used = list(tool_provenance.get(d.transaction_id, []))
                 t_log = {
                     "transaction_id": d.transaction_id,
@@ -481,18 +718,6 @@ def _execute_reconciliation_pipeline(
                 }
                 investigation_logs.append(t_log)
 
-            # Step 6: Milestone — Phase 2 batch progress
-            if event_callback:
-                event_callback({
-                    "event": "phase2_batch_progress",
-                    "batch_index": i + 1,
-                    "batch_total": len(chunks),
-                    "cases_in_batch": len(chunk),
-                    "cumulative_resolved": cumulative_resolved,
-                    "cumulative_human_review": cumulative_human_review,
-                    "cumulative_not_evaluated": cumulative_not_evaluated,
-                })
-
         t_p2_end = time.time()
         phase2_time_sec = max(t_p2_end - t_p2_start, 0.001)
         end_to_end_time_sec = max(time.time() - t_start, 0.001)
@@ -508,10 +733,26 @@ def _execute_reconciliation_pipeline(
 
         final_resolved = initial_reconciled + auto_resolved
         final_unresolved = len(agent_decisions) - auto_resolved
-        assert final_resolved + final_unresolved == total_records, "Accounting invariant violated: final_resolved + final_unresolved != total_records"
+        _assert_accounting_invariant(final_resolved, final_unresolved, total_records)
 
         initial_match_rate = phase1_metrics["match_rate"]
         agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
+
+        print(f"========================================", flush=True)
+        print(f"RUN SUMMARY [{run_id}]", flush=True)
+        print(f"========================================", flush=True)
+        print(f"Total Records:      {total_records}", flush=True)
+        print(f"Initial Reconciled: {initial_reconciled}", flush=True)
+        print(f"Exceptions:         {initial_exceptions}", flush=True)
+        print(f"Auto-Resolved:      {auto_resolved}", flush=True)
+        print(f"Human Review:       {human_review}", flush=True)
+        if not_evaluated:
+            print(f"Not Evaluated:      {not_evaluated}", flush=True)
+        print(f"Resolution Rate:    {agent_resolution_rate:.2f}%", flush=True)
+        print(f"Phase 1 Time:       {phase1_time_sec:.2f}s", flush=True)
+        print(f"Phase 2 AI Time:    {phase2_time_sec:.2f}s", flush=True)
+        print(f"Total Time:         {end_to_end_time_sec:.2f}s", flush=True)
+        print(f"========================================\n", flush=True)
         final_resolution_rate = (final_resolved / total_records * 100) if total_records > 0 else 0.0
 
         # Throughput, reported per phase so neither rate can be mistaken for the
@@ -529,7 +770,17 @@ def _execute_reconciliation_pipeline(
         provider_name = run_meta["llm_provider"]
         mode_name = run_meta["llm_mode"]
         model_name = run_meta["llm_model"]
-        token_totals = _multi_agent_token_totals(batch_agent)
+        total_p = sum(getattr(l, "prompt_tokens", 0) or 0 for l in batch_logs)
+        total_c = sum(getattr(l, "completion_tokens", 0) or 0 for l in batch_logs)
+        total_tok = sum(getattr(l, "total_tokens", 0) or 0 for l in batch_logs)
+        if total_tok > 0:
+            token_totals = {
+                "prompt_tokens": total_p or None,
+                "completion_tokens": total_c or None,
+                "total_tokens": total_tok or None,
+            }
+        else:
+            token_totals = _multi_agent_token_totals(batch_agent)
         tokens_per_case = (
             (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
         )
@@ -646,6 +897,14 @@ def _execute_reconciliation_pipeline(
                 "not_evaluated": not_evaluated,
                 "degraded_cases": degraded_cases,
                 "has_ground_truth": has_ground_truth,
+                # Which engine actually produced the Phase-2 verdicts. Without
+                # these the UI could not distinguish a real-model run from one
+                # served entirely by the offline demo emulator, and announced
+                # both as an unqualified success.
+                "llm_mode": mode_name,
+                "llm_provider": provider_name,
+                "llm_degraded": run_meta["llm_degraded"],
+                "llm_degraded_reason": run_meta["llm_degraded_reason"],
             })
 
         return _run_summary_from_model(run_model)
@@ -702,8 +961,7 @@ async def start_upload_reconciliation(
         else None
     )
 
-    event_q = queue.Queue()
-    _ACTIVE_RUN_STREAMS[run_id] = event_q
+    event_q = _register_stream(_ACTIVE_RUN_STREAMS, run_id)
 
     def event_callback(event_data: Dict[str, Any]):
         event_q.put(event_data)
@@ -743,16 +1001,35 @@ def stream_run_events(run_id: str, db: Session = Depends(get_db)):
 
     def event_generator():
         if not event_q:
-            run = FinanceRepository.get_run_by_id(db, run_id)
+            run = FinanceRepository.get_run(db, run_id)
             if run:
-                yield f"event: run_completed\ndata: {json.dumps({'run_id': run.id, 'final_resolution_rate': run.final_resolution_rate})}\n\n"
+                # Replay for a client that reconnected after the run finished.
+                # Carries the same honesty fields as the live event so a
+                # reconnecting UI cannot render a failed/degraded run as clean.
+                yield "event: run_completed\ndata: " + json.dumps({
+                    "run_id": run.id,
+                    "final_resolution_rate": run.final_resolution_rate,
+                    "total_records": run.total_records,
+                    "initial_reconciled": run.initial_reconciled,
+                    "ai_auto_resolved": run.ai_auto_resolved,
+                    "human_review": run.human_review,
+                    "not_evaluated": run.not_evaluated or 0,
+                    "degraded_cases": run.degraded_cases or 0,
+                    "has_ground_truth": bool(run.has_ground_truth),
+                    "llm_mode": run.llm_mode,
+                    "llm_provider": run.llm_provider,
+                    "llm_degraded": bool(getattr(run, "llm_degraded", False)),
+                    "llm_degraded_reason": getattr(run, "llm_degraded_reason", None),
+                }) + "\n\n"
             else:
                 yield f"event: run_error\ndata: {json.dumps({'error': f'Reconciliation run {run_id} not found or stream expired.'})}\n\n"
             return
 
+        idle_heartbeats = 0
         while True:
             try:
-                event_data = event_q.get(timeout=30.0)
+                event_data = event_q.get(timeout=_STREAM_POLL_TIMEOUT_SEC)
+                idle_heartbeats = 0
                 if event_data.get("event") == "_stream_closed":
                     _ACTIVE_RUN_STREAMS.pop(run_id, None)
                     break
@@ -762,6 +1039,22 @@ def stream_run_events(run_id: str, db: Session = Depends(get_db)):
                     _ACTIVE_RUN_STREAMS.pop(run_id, None)
                     break
             except queue.Empty:
+                idle_heartbeats += 1
+                if idle_heartbeats > _STREAM_MAX_IDLE_HEARTBEATS:
+                    # The worker thread pushes _stream_closed from a finally
+                    # block, so silence this long means it was killed without
+                    # unwinding (interpreter shutdown of a daemon thread).
+                    # `while True` previously heartbeat forever in that case and
+                    # the UI stayed pinned to RUNNING_AI with no way out.
+                    _ACTIVE_RUN_STREAMS.pop(run_id, None)
+                    yield "event: run_error\ndata: " + json.dumps({
+                        "error": (
+                            f"No progress from run {run_id} for "
+                            f"{_STREAM_MAX_IDLE_HEARTBEATS * _STREAM_POLL_TIMEOUT_SEC / 60:.0f} minutes; "
+                            "the stream was closed. The run may still be executing — check the Runs tab."
+                        )
+                    }) + "\n\n"
+                    break
                 yield ": heartbeat\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -844,21 +1137,23 @@ def create_run(db: Session = Depends(get_db)):
     t_start = time.time()
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-    # Project root directory for data CSVs
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
-    data_dir = os.path.join(project_root, "data")
+    # Step 1: Generate synthetic data across 4 sources.
+    # Written to a per-run temporary directory, not data/: this endpoint used to
+    # overwrite the repository's checked-in demo CSVs on every call, so two
+    # concurrent requests could read each other's half-written files.
+    tmp_dir = tempfile.mkdtemp(prefix=f"{run_id}_")
+    try:
+        generator = SyntheticDataGenerator(seed=42, total_transactions=100)
+        p_path, l_path, b_path, a_path = generator.save_to_csv(tmp_dir)
+        payments, ledger, bank, adjustments, ground_truth = generator.generate()
 
-    # Step 1: Generate synthetic data across 4 sources
-    generator = SyntheticDataGenerator(seed=42, total_transactions=100)
-    p_path, l_path, b_path, a_path = generator.save_to_csv(data_dir)
-    payments, ledger, bank, adjustments, ground_truth = generator.generate()
-
-    # Step 2: Phase 1 deterministic reconciliation
-    t_p1_start = time.time()
-    phase1_results, phase1_metrics = ReconciliationEngine.reconcile_batch(p_path, l_path, b_path)
-    t_p1_end = time.time()
-    phase1_time_sec = max(t_p1_end - t_p1_start, 0.001)
+        # Step 2: Phase 1 deterministic reconciliation
+        t_p1_start = time.time()
+        phase1_results, phase1_metrics = ReconciliationEngine.reconcile_batch(p_path, l_path, b_path)
+        t_p1_end = time.time()
+        phase1_time_sec = max(t_p1_end - t_p1_start, 0.001)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Step 3: Filter exceptions
     exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
@@ -873,20 +1168,20 @@ def create_run(db: Session = Depends(get_db)):
     resolution = _resolve_investigation_providers()
     batch_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
     chunks = partition_exceptions_balanced(exceptions, batch_size=5) if exceptions else []
+    max_parallel_workers = max(1, min(len(chunks), int(os.getenv("MAX_PARALLEL_BATCHES", "5")))) if chunks else 1
 
     agent_decisions = []
     investigation_logs = []
     degraded_cases = 0
 
-    for chunk in chunks:
+    batch_results_by_index: Dict[int, Any] = {}
+
+    def _execute_synthetic_chunk(i: int, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch_log = None
         try:
-            chunk_decisions, batch_log = batch_agent.investigate_batch(chunk)
+            local_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
+            chunk_decisions, batch_log = local_agent.investigate_batch(chunk)
         except Exception as e:
-            # Whole-batch failure. These cases were never assessed, so they are
-            # NOT_EVALUATED rather than HUMAN_REVIEW -- a system failure is not
-            # a considered escalation. One decision per exception still holds,
-            # so the accounting invariant is preserved.
             logger.warning("Batch failed entirely (%s); marking %d case(s) NOT_EVALUATED", e, len(chunk))
             chunk_decisions = [
                 AgentDecision(
@@ -907,6 +1202,28 @@ def create_run(db: Session = Depends(get_db)):
                 )
                 for exc in chunk
             ]
+        return {
+            "batch_index": i,
+            "chunk": chunk,
+            "chunk_decisions": chunk_decisions,
+            "batch_log": batch_log,
+        }
+
+    if chunks:
+        with ThreadPoolExecutor(max_workers=max_parallel_workers) as executor:
+            futures = [executor.submit(_execute_synthetic_chunk, i, chunk) for i, chunk in enumerate(chunks)]
+            for future in as_completed(futures):
+                res = future.result()
+                batch_results_by_index[res["batch_index"]] = res
+
+    batch_logs = []
+    for i in range(len(chunks)):
+        res = batch_results_by_index[i]
+        chunk = res["chunk"]
+        chunk_decisions = res["chunk_decisions"]
+        batch_log = res["batch_log"]
+        if batch_log is not None:
+            batch_logs.append(batch_log)
 
         degraded_cases += (
             getattr(batch_log, "not_evaluated_count", 0) if batch_log is not None else len(chunk)
@@ -916,7 +1233,6 @@ def create_run(db: Session = Depends(get_db)):
         for d in chunk_decisions:
             agent_decisions.append(d)
             exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
-            # Real provenance: the toolkit methods actually invoked for this case.
             tools_used = list(tool_provenance.get(d.transaction_id, []))
             investigation_logs.append({
                 "transaction_id": d.transaction_id,
@@ -950,7 +1266,7 @@ def create_run(db: Session = Depends(get_db)):
 
     final_resolved = initial_reconciled + auto_resolved
     final_unresolved = len(agent_decisions) - auto_resolved
-    assert final_resolved + final_unresolved == total_records, "Accounting invariant violated: final_resolved + final_unresolved != total_records"
+    _assert_accounting_invariant(final_resolved, final_unresolved, total_records)
 
     initial_match_rate = phase1_metrics["match_rate"]
     agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
@@ -975,7 +1291,17 @@ def create_run(db: Session = Depends(get_db)):
     provider_name = run_meta["llm_provider"]
     mode_name = run_meta["llm_mode"]
     model_name = run_meta["llm_model"]
-    token_totals = _multi_agent_token_totals(batch_agent)
+    total_p = sum(getattr(l, "prompt_tokens", 0) or 0 for l in batch_logs)
+    total_c = sum(getattr(l, "completion_tokens", 0) or 0 for l in batch_logs)
+    total_tok = sum(getattr(l, "total_tokens", 0) or 0 for l in batch_logs)
+    if total_tok > 0:
+        token_totals = {
+            "prompt_tokens": total_p or None,
+            "completion_tokens": total_c or None,
+            "total_tokens": total_tok or None,
+        }
+    else:
+        token_totals = _multi_agent_token_totals(batch_agent)
     tokens_per_case = (
         (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
     )

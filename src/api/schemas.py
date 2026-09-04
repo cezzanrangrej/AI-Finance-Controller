@@ -2,7 +2,7 @@
 Pydantic API schemas for request and response validation.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 
@@ -179,9 +179,6 @@ class EvaluationGroupSummaryResponse(BaseModel):
     average_tokens_per_case: int
     per_run_summaries: List[PerRunSummary]
 
-
-
-from typing import Any, Dict, List, Optional, Union
 
 
 class ExceptionItemResponse(BaseModel):

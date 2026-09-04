@@ -29,6 +29,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
+from src.config import DEFAULT_GEMINI_MODEL
+
 logger = logging.getLogger(__name__)
 
 DEMO = "demo"
@@ -57,7 +59,7 @@ _PROVIDER_SPECS: Dict[str, _ProviderSpec] = {
     "gemini": _ProviderSpec(
         key_vars=("GEMINI_API_KEY",),
         model_vars=("GEMINI_MODEL",),
-        default_model="gemini-2.5-flash",
+        default_model=DEFAULT_GEMINI_MODEL,
         model_required=False,
     ),
     "openrouter": _ProviderSpec(
@@ -364,6 +366,14 @@ def resolve_providers(
     Returns:
         A ``ProviderResolution`` describing both roles.
     """
+    import sys
+    if "pytest" not in sys.modules:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+        except Exception:
+            pass
+
     explicit_base = normalize_provider(provider)
     base = resolve_base_provider(provider)
 

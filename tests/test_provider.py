@@ -593,3 +593,66 @@ def test_mock_gemini_case_d_contradictory_evidence(sample_toolkit_data):
     assert log.tool_call_count == 1
     assert log.tool_traces[0].tool_name == "check_for_duplicates"
 
+
+
+# 14. Automatic function calling is disabled on every Gemini request
+@pytest.mark.parametrize(
+    "tools",
+    [
+        pytest.param(None, id="tool_free_call"),
+        pytest.param(
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_payment_record",
+                        "description": "Fetch the payment record.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"transaction_id": {"type": "string"}},
+                            "required": ["transaction_id"],
+                        },
+                    },
+                }
+            ],
+            id="tool_calling_call",
+        ),
+    ],
+)
+def test_gemini_request_always_disables_automatic_function_calling(tools):
+    """google-genai must never execute tools on our behalf, tools declared or not.
+
+    This client is a transport: the tool loop lives in AgentController /
+    InvestigatorAgent, which is what writes the audit trail and enforces
+    MAX_TOOL_CALLS. AFC was previously only disabled when function declarations
+    were present, so tool-free requests (the Verifier, both batch controllers)
+    were routed through the SDK's own remote-call loop and logged
+    "Direct use of automatic function calling (AFC) in Models.generate_content
+    is not recommended" on the first such call.
+    """
+    from google.genai import _extra_utils, types as genai_types
+
+    client = GeminiLLMClient(api_key="fake_key_offline_test", model="gemini-2.5-flash")
+
+    captured = {}
+
+    def fake_generate_content(*, model, contents, config):
+        captured["config"] = config
+        return genai_types.GenerateContentResponse()
+
+    with patch.object(client._client.models, "generate_content", side_effect=fake_generate_content):
+        client.chat(
+            messages=[
+                {"role": "system", "content": "You are an auditor."},
+                {"role": "user", "content": "Investigate TXN_001."},
+            ],
+            tools=tools,
+            max_tokens=512,
+        )
+
+    config = captured["config"]
+    assert config.automatic_function_calling is not None
+    assert config.automatic_function_calling.disable is True
+    # The SDK's own gate: True means generate_content returns before entering
+    # (and warning about) the AFC loop.
+    assert _extra_utils.should_disable_afc(config) is True

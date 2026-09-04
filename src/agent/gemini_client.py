@@ -11,9 +11,11 @@ from typing import Any, Dict, List, Optional
 from google import genai
 from google.genai import types
 
+from src.agent.rate_limit import LLMRateLimitError, extract_retry_after
+from src.config import DEFAULT_GEMINI_MODEL
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 2.0
 
@@ -25,6 +27,13 @@ class GeminiLLMClient:
     """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
+        import sys
+        if not api_key and "pytest" not in sys.modules:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(override=True)
+            except Exception:
+                pass
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         if not self.api_key:
             raise ValueError(
@@ -149,6 +158,18 @@ class GeminiLLMClient:
             "system_instruction": system_instruction,
             "tools": gemini_tools,
             "temperature": 0.1,
+            # Always disabled, tools declared or not. This client is a transport:
+            # every tool call is dispatched by the caller's own loop
+            # (AgentController / InvestigatorAgent), which is what records the
+            # audit trail and enforces MAX_TOOL_CALLS. Letting the SDK execute
+            # functions itself would bypass both.
+            #
+            # It has to be set even on tool-free calls (the Verifier, the batch
+            # controllers). Left unset, google-genai treats AFC as enabled,
+            # routes the request through its own remote-call loop and logs
+            # "Direct use of automatic function calling (AFC) in
+            # Models.generate_content is not recommended" on the first such call.
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
         }
         if max_tokens is not None:
             config_kwargs["max_output_tokens"] = max_tokens
@@ -168,21 +189,27 @@ class GeminiLLMClient:
                 break
             except Exception as e:
                 last_exception = e
-                logger.warning(f"Gemini API attempt {attempt + 1} failed: {str(e)}")
+                err_str = str(e)
+                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                logger.warning(f"Gemini API attempt {attempt + 1} failed (rate_limit={is_rate_limit}): {err_str}")
+
+                if is_rate_limit:
+                    # Surface immediately so the outer parallel retry layer
+                    # can back off with jitter without blocking sibling threads.
+                    retry_after = extract_retry_after(err_str)
+                    raise LLMRateLimitError(
+                        f"Gemini rate limit on attempt {attempt + 1}: {err_str}",
+                        retry_after=retry_after,
+                        provider="gemini",
+                        status_code=429,
+                        attempt=attempt + 1,
+                    ) from e
+
                 if attempt < MAX_RETRIES - 1:
-                    err_str = str(e)
                     sleep_time = INITIAL_RETRY_DELAY * (2**attempt)
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        import re
-                        match = re.search(r"retry in (\d+(\.\d+)?)s", err_str, re.IGNORECASE)
-                        if match:
-                            sleep_time = float(match.group(1)) + 2.0
-                        else:
-                            sleep_time = max(sleep_time, 25.0)
-                        print(f"[Rate Limit] Pausing {sleep_time:.1f}s for Gemini quota window...", flush=True)
                     time.sleep(sleep_time)
                 else:
-                    raise RuntimeError(f"Gemini API request failed after {MAX_RETRIES} attempts: {str(e)}") from e
+                    raise RuntimeError(f"Gemini API request failed after {MAX_RETRIES} attempts: {err_str}") from e
 
         # Extract usage metadata if present
         if response and hasattr(response, "usage_metadata") and response.usage_metadata:

@@ -1,9 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, RefreshCw, PanelLeft, PanelLeftClose, CheckCircle2, Loader2, AlertCircle, Database, Download, FileText, FileCode, ChevronDown } from 'lucide-react';
+import { PanelLeft, PanelLeftClose, CheckCircle2, Loader2, AlertCircle, Database, Download, FileText, FileCode, ChevronDown } from 'lucide-react';
 
 export default function Header({
   activeRunId,
-  onRunReconciliation,
   workflowState,
   progressState,
   datasetSource,
@@ -12,14 +11,6 @@ export default function Header({
 }) {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const menuRef = useRef(null);
-  const isRunning =
-    workflowState === 'RUNNING_PHASE_1' ||
-    workflowState === 'RUNNING_AI' ||
-    workflowState === 'VALIDATING' ||
-    workflowState === 'UPLOADING' ||
-    progressState?.stage === 'UPLOADING' ||
-    progressState?.stage === 'PHASE_1' ||
-    progressState?.stage === 'PHASE_2';
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -106,7 +97,7 @@ export default function Header({
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-sm font-bold tracking-tight text-text uppercase">
-              AI Finance Controller
+              ReconPilot
             </h1>
             
             {/* Status Badge */}
@@ -173,28 +164,6 @@ export default function Header({
             )}
           </div>
         )}
-
-        <button
-          onClick={onRunReconciliation}
-          disabled={isRunning}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all shadow-xs cursor-pointer ${
-            isRunning
-              ? 'bg-surface-alt text-text-secondary/60 cursor-not-allowed border border-border'
-              : 'bg-primary hover:bg-primary-light text-white active:translate-y-px'
-          }`}
-        >
-          {isRunning ? (
-            <>
-              <RefreshCw className="h-3.5 w-3.5 animate-spin text-white" />
-              <span>Running...</span>
-            </>
-          ) : (
-            <>
-              <Play className="h-3.5 w-3.5 fill-current" />
-              <span>Run Reconciliation</span>
-            </>
-          )}
-        </button>
       </div>
     </header>
   );

@@ -25,13 +25,17 @@ export function useActiveRun() {
       setRuns(data);
       if (targetRunId) {
         setActiveRunId(targetRunId);
-      } else if (data.length > 0) {
-        setActiveRunId((prev) => (prev && data.some((r) => r.run_id === prev) ? prev : data[0].run_id));
       } else {
-        setActiveRunId(null);
-        setMetrics(null);
-        setTransactions([]);
-        setExceptions([]);
+        // Never adopt a run the user did not ask for. Seeding this with the most
+        // recent stored run made the dashboard open on some earlier dataset's
+        // figures: the header truthfully read "No dataset loaded" while every KPI,
+        // chart and ledger row below it described an unrelated previous run.
+        // A run becomes active only when one finishes here (refreshRuns(runId))
+        // or when the user selects one in the Runs tab. Keeping an already
+        // selected run alive matters for the post-run refresh; if it has since
+        // been deleted server-side, clearing it lets the derived-data effect
+        // reset metrics/transactions/exceptions.
+        setActiveRunId((prev) => (prev && data.some((r) => r.run_id === prev) ? prev : null));
       }
     } catch (err) {
       setRuns([]);

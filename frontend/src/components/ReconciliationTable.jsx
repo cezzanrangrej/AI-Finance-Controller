@@ -104,7 +104,7 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
     { key: 'ALL', label: 'All Transactions', count: unifiedItems.length },
     { key: 'RECONCILED', label: 'Reconciled', count: unifiedItems.filter((i) => i.status === 'RECONCILED').length },
     { key: 'AUTO_RESOLVED', label: 'Auto-Resolved', count: unifiedItems.filter((i) => i.decision === 'AUTO_RESOLVED').length },
-    { key: 'HUMAN_REVIEW', label: 'Needs Attention', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW' || i.decision === 'NOT_EVALUATED').length },
+    { key: 'HUMAN_REVIEW', label: 'Human-Review', count: unifiedItems.filter((i) => i.decision === 'HUMAN_REVIEW' || i.decision === 'NOT_EVALUATED').length },
   ];
 
   const handleDownloadCSV = () => {
@@ -185,21 +185,18 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
       <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; border-bottom: 1px solid #e2e8f0;">
         <td style="padding: 8px 10px; font-family: monospace; font-weight: 600; font-size: 11px;">${item.transaction_id}</td>
         <td style="padding: 8px 10px; text-align: center;">
-          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: ${
-            item.status === 'RECONCILED' ? '#ecfdf5; color: #065f46;' : '#fffbeb; color: #92400e;'
+          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: ${item.status === 'RECONCILED' ? '#ecfdf5; color: #065f46;' : '#fffbeb; color: #92400e;'
           }">${item.status}</span>
         </td>
         <td style="padding: 8px 10px; font-size: 11px; color: #475569;">${item.exception_type}</td>
         <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px;">₹${formatMoney(item.payment_amount)}</td>
         <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px;">₹${formatMoney(item.bank_amount)}</td>
-        <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px; color: ${
-          item.difference ? '#b45309; font-weight: 600;' : '#64748b;'
-        }">₹${formatMoney(item.difference)}</td>
+        <td style="padding: 8px 10px; text-align: right; font-family: monospace; font-size: 11px; color: ${item.difference ? '#b45309; font-weight: 600;' : '#64748b;'
+          }">₹${formatMoney(item.difference)}</td>
         <td style="padding: 8px 10px; text-align: center;">
-          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; ${
-            item.decision === 'AUTO_RESOLVED'
-              ? 'background: #ecfdf5; color: #065f46;'
-              : item.decision === 'HUMAN_REVIEW'
+          <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; ${item.decision === 'AUTO_RESOLVED'
+            ? 'background: #ecfdf5; color: #065f46;'
+            : item.decision === 'HUMAN_REVIEW'
               ? 'background: #fef2f2; color: #991b1b;'
               : 'color: #64748b;'
           }">${item.decision}</span>
@@ -239,7 +236,7 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
       <body>
         <div class="header">
           <div>
-            <h1 class="title">AI Finance Controller</h1>
+            <h1 class="title">ReconPilot</h1>
             <p class="subtitle">Reconciliation Ledger & Financial Audit Report</p>
           </div>
           <div class="meta">
@@ -286,7 +283,7 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
         </table>
 
         <div class="footer">
-          Generated automatically by AI Finance Controller • Complete Multi-Source Audit Trail
+          Generated automatically by ReconPilot • Complete Multi-Source Audit Trail
         </div>
 
         <script>
@@ -363,11 +360,10 @@ export default function ReconciliationTable({ transactions, exceptions, onSelect
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                  activeTab === tab.key
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${activeTab === tab.key
                     ? 'bg-background text-text shadow-xs font-semibold'
                     : 'text-text-secondary hover:text-text'
-                }`}
+                  }`}
               >
                 {tab.label}
                 <span className="ml-1.5 font-mono text-[10px] px-1.5 py-0.2 rounded bg-surface border border-border text-text-secondary">

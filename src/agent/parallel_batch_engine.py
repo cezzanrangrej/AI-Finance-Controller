@@ -286,11 +286,22 @@ async def run_parallel_batches(
                     "cases_completed_so_far": len(current_all_decisions),
                     "partial_results": [d.model_dump(mode="json") for d in current_all_decisions],
                 }
-                try:
-                    with open(resume_file, "w", encoding="utf-8") as f:
-                        json.dump(partial_report, f, indent=2)
-                except Exception:
-                    pass
+                # An empty resume_file means checkpointing was not requested,
+                # which is not a failure and must not be warned about.
+                if resume_file:
+                    try:
+                        with open(resume_file, "w", encoding="utf-8") as f:
+                            json.dump(partial_report, f, indent=2)
+                    except Exception as e:
+                        # A checkpoint failure must not abort an expensive
+                        # in-flight LLM run, so it stays non-fatal -- but it was
+                        # swallowed silently, leaving the operator believing the
+                        # run could be resumed when no checkpoint had been
+                        # written at all.
+                        safe_print_trace(
+                            f"[WARN] Could not write resume checkpoint to {resume_file}: {e}. "
+                            "This run will not be resumable."
+                        )
 
             return res
 

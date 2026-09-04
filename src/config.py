@@ -5,11 +5,30 @@ Uses pydantic-settings BaseSettings to manage typed environment configuration wi
 Loads .env into os.environ at startup so os.getenv and monkeypatch work standardly across tests.
 """
 
+import logging
 import os
 from pathlib import Path
+from typing import Optional
+
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+#: Upper bound on concurrent Phase-2 batches, to stay inside provider rate limits.
+_MAX_PARALLEL_CEILING = 5
+
+#: Single source of truth for the Gemini fallback model.
+#:
+#: This value was previously duplicated with four different literals --
+#: "gemini-2.5-flash" here and in .env.example, "gemini-3.5-flash" in
+#: src/agent/gemini_client.py, and "gemini-3.6-flash" in
+#: src/agent/provider_resolution.py. With GEMINI_MODEL unset, a single-agent run
+#: and a multi-agent run therefore called different models, and the model name
+#: persisted on the run did not necessarily match the one that was invoked.
+#: .env.example is what operators copy, so its value is the one kept.
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 _current_dir = Path(__file__).resolve().parent
 _project_root = _current_dir.parent
@@ -37,7 +56,7 @@ class Settings(BaseSettings):
     demo_mode: str = Field(default="", validation_alias="DEMO_MODE")
     
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+    gemini_model: str = Field(default=DEFAULT_GEMINI_MODEL, validation_alias="GEMINI_MODEL")
     
     openrouter_api_key: str = Field(default="", validation_alias="OPENROUTER_API_KEY")
     openrouter_model: str = Field(default="", validation_alias="OPENROUTER_MODEL")
@@ -92,7 +111,7 @@ def get_gemini_api_key() -> str:
 
 def get_gemini_model() -> str:
     """Returns the configured Gemini model name."""
-    return (os.getenv("GEMINI_MODEL") or os.getenv("MODEL_NAME") or settings.gemini_model or "gemini-2.5-flash").strip()
+    return (os.getenv("GEMINI_MODEL") or os.getenv("MODEL_NAME") or settings.gemini_model or DEFAULT_GEMINI_MODEL).strip()
 
 
 def is_gemini_key_configured() -> bool:
@@ -121,16 +140,33 @@ def is_openrouter_key_configured() -> bool:
 
 
 def get_max_parallel_batches() -> int:
-    """Returns MAX_PARALLEL_BATCHES configured in environment (default 5, validated 1-5)."""
-    env_val = os.getenv("MAX_PARALLEL_BATCHES")
-    if env_val is not None:
+    """
+    Returns MAX_PARALLEL_BATCHES from the environment, clamped to 1-5.
+
+    The upper bound guards provider rate limits. Clamping is logged rather than
+    silent: a request for 20 concurrent batches that quietly became 5 made the
+    measured parallel speed-up look worse than the configuration implied, with
+    nothing in the output explaining why.
+    """
+    raw = os.getenv("MAX_PARALLEL_BATCHES")
+    val: Optional[int] = None
+    if raw is not None:
         try:
-            val = int(env_val.strip())
-            return max(1, min(5, val))
+            val = int(raw.strip())
         except (ValueError, TypeError):
-            pass
-    try:
-        val = settings.max_parallel_batches
-        return max(1, min(5, val))
-    except (ValueError, TypeError):
-        return 5
+            logger.warning(
+                "MAX_PARALLEL_BATCHES=%r is not an integer; using %d.", raw, _MAX_PARALLEL_CEILING
+            )
+    if val is None:
+        try:
+            val = int(settings.max_parallel_batches)
+        except (ValueError, TypeError):
+            return _MAX_PARALLEL_CEILING
+
+    clamped = max(1, min(_MAX_PARALLEL_CEILING, val))
+    if clamped != val:
+        logger.warning(
+            "MAX_PARALLEL_BATCHES=%d is outside the supported range 1-%d; using %d.",
+            val, _MAX_PARALLEL_CEILING, clamped,
+        )
+    return clamped

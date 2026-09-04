@@ -1,7 +1,8 @@
 import React from 'react';
 import { ArrowUpRight, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
 
-export default function HumanReviewSection({ exceptions, onSelectException }) {
+export default function HumanReviewSection({ exceptions, onSelectException, onSelectTransaction }) {
+  const handleSelect = onSelectException || onSelectTransaction;
   if (!exceptions || exceptions.length === 0) return null;
 
   const humanReviewCases = exceptions.filter((e) => e.decision === 'HUMAN_REVIEW' || e.decision === 'NOT_EVALUATED');
@@ -37,9 +38,9 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {autoResolvedCases.map((item) => (
               <div
-                key={item.transaction_id}
-                onClick={() => onSelectException(item.transaction_id)}
-                className="bg-surface border border-border hover:border-accent-green/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
+              key={item.transaction_id}
+              onClick={() => handleSelect?.(item.transaction_id)}
+              className="bg-surface border border-border hover:border-accent-green/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
               >
                 <div>
                   <div className="flex items-center justify-between">
@@ -104,7 +105,7 @@ export default function HumanReviewSection({ exceptions, onSelectException }) {
           {humanReviewCases.slice(0, 6).map((item) => (
             <div
               key={item.transaction_id}
-              onClick={() => onSelectException(item.transaction_id)}
+              onClick={() => handleSelect?.(item.transaction_id)}
               className="bg-surface border border-border hover:border-accent-coral/50 p-4 rounded-lg cursor-pointer transition-all flex flex-col justify-between group"
             >
               <div>

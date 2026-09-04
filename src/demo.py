@@ -32,6 +32,38 @@ from src.api.main import app
 client = TestClient(app)
 
 
+def _rate(metrics: dict, key: str) -> str:
+    """
+    Renders a percentage metric, or "N/A (not measured)" when it is absent or
+    None.
+
+    ``metrics.get(key, 100.0)`` was used here, which was wrong twice over: the
+    default only fires when the key is *missing*, whereas the API always sends
+    the key and sets it to None when there was no ground truth to measure
+    against -- so an unmeasured run either crashed on ``f"{None:.2f}"`` or, for
+    the keys that do default, printed a fabricated 100%. An empty denominator is
+    unmeasured, not perfect.
+    """
+    value = metrics.get(key)
+    if value is None:
+        return "N/A (not measured)"
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return "N/A (not measured)"
+
+
+def _seconds(metrics: dict, key: str, digits: int = 4) -> str:
+    """Renders a timing metric, or N/A when the API did not report it."""
+    value = metrics.get(key)
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 def run_e2e_demo():
     os.environ["LLM_PROVIDER"] = "demo"
     print("Initiating Phase 3.1 End-to-End Reconciliation & AI Investigation Pipeline...\n")
@@ -72,30 +104,33 @@ def run_e2e_demo():
     print(f"AI auto-resolved:            {metrics['ai_auto_resolved']}")
     print(f"Human review:                {metrics['human_review']}\n")
 
-    print(f"Initial match rate:          {metrics['initial_match_rate']:.2f}%")
-    print(f"AI resolution rate:          {metrics['agent_resolution_rate']:.2f}%")
-    print(f"Final resolution rate:       {metrics['final_resolution_rate']:.2f}%\n")
+    print(f"Initial match rate:          {_rate(metrics, 'initial_match_rate')}")
+    print(f"AI resolution rate:          {_rate(metrics, 'agent_resolution_rate')}")
+    print(f"Final resolution rate:       {_rate(metrics, 'final_resolution_rate')}\n")
 
-    p1_acc = metrics.get('phase1_accuracy', 100.0)
-    p2_acc = metrics.get('phase2_accuracy') or metrics.get('ground_truth_accuracy', 100.0)
-    prec = metrics.get('auto_resolution_precision', 100.0)
-    rec = metrics.get('auto_resolution_recall', 100.0)
+    # phase2_accuracy and ground_truth_accuracy are the same measurement; the
+    # former was previously read with `or`, so a genuine 0.00% accuracy fell
+    # through to the fallback and was reported as a pass.
+    p2_key = "phase2_accuracy" if metrics.get("phase2_accuracy") is not None else "ground_truth_accuracy"
 
-    print(f"Phase 1 accuracy:             {p1_acc:.2f}%")
-    print(f"Phase 2 decision accuracy:   {p2_acc:.2f}%")
-    print(f"Auto-resolution precision:  {prec:.2f}%")
-    print(f"Auto-resolution recall:     {rec:.2f}%\n")
+    print(f"Phase 1 accuracy:             {_rate(metrics, 'phase1_accuracy')}")
+    print(f"Phase 2 decision accuracy:   {_rate(metrics, p2_key)}")
+    print(f"Auto-resolution precision:  {_rate(metrics, 'auto_resolution_precision')}")
+    print(f"Auto-resolution recall:     {_rate(metrics, 'auto_resolution_recall')}\n")
 
-    p1_time = metrics.get('phase1_time_sec', 0.005)
-    p2_time = metrics.get('phase2_time_sec', 0.010)
-    e2e_time = metrics.get('end_to_end_time_sec', metrics.get('total_processing_time_sec', 0.015))
-    p1_tp = metrics.get('records_per_second', 20000.0)
+    e2e_key = (
+        "end_to_end_time_sec"
+        if metrics.get("end_to_end_time_sec") is not None
+        else "total_processing_time_sec"
+    )
 
-    print(f"Phase 1 processing time:     {p1_time:.4f} sec")
-    print(f"Phase 2 processing time:     {p2_time:.4f} sec")
-    print(f"End-to-end processing time:  {e2e_time:.4f} sec\n")
+    print(f"Phase 1 processing time:     {_seconds(metrics, 'phase1_time_sec')} sec")
+    print(f"Phase 2 processing time:     {_seconds(metrics, 'phase2_time_sec')} sec")
+    print(f"End-to-end processing time:  {_seconds(metrics, e2e_key)} sec\n")
 
-    print(f"Phase 1 throughput:          {p1_tp:.2f} records/sec")
+    # Previously defaulted to a hardcoded 20000.0 records/sec, which printed an
+    # invented benchmark figure whenever the API had not measured throughput.
+    print(f"Phase 1 throughput:          {_seconds(metrics, 'records_per_second', 2)} records/sec")
     print("========================================\n")
 
     # Exception Breakdown Detail

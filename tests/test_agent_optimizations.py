@@ -14,8 +14,8 @@ from src.agent.prompts import (
     build_batch_verifier_prompt,
 )
 from src.agent.schemas import InvestigationProposal, VerificationResult
-from src.agent.multi_agent.investigator import InvestigatorAgent
-from src.agent.multi_agent.verifier import VerifierAgent
+from src.agent.multi_agent.investigator import INVESTIGATOR_MAX_TOKENS, InvestigatorAgent
+from src.agent.multi_agent.verifier import VERIFIER_MAX_TOKENS, VerifierAgent
 from src.agent.controller import LLMClient, EvidenceState, has_sufficient_resolution_evidence
 
 
@@ -100,6 +100,7 @@ def test_has_sufficient_resolution_evidence_with_verification():
     state.update("verify_discrepancy", {
         "transaction_id": "TXN_001",
         "discrepancy_fully_explained": True,
+        "match_type": "BANK_ADJUSTMENT",
         "resolved_difference": 200.0,
         "explanation": "Bank credit exactly matches expected settlement minus adjustment of 200.",
     })
@@ -107,6 +108,83 @@ def test_has_sufficient_resolution_evidence_with_verification():
     assert proven is True
     assert data["resolution_type"] == "ADJUSTMENT_EXPLAINED"
     assert data["resolved_difference"] == 200.0
+
+
+def test_resolution_evidence_rejects_proof_about_the_wrong_figure():
+    """A gross-side proof must not close a bank-side exception (and vice versa).
+
+    ``verify_discrepancy`` tests the bank identity and the gross identity
+    independently and reports whichever one held. They are claims about different
+    amounts, so the one that held has to be the one the exception was raised on --
+    otherwise a BANK_AMOUNT_MISMATCH is auto-resolved with an explanation that
+    never addresses the bank figure.
+    """
+    gross_proof = {
+        "transaction_id": "TXN_002",
+        "discrepancy_fully_explained": True,
+        "match_type": "GROSS_ADJUSTMENT",
+        "resolved_difference": 200.0,
+        "explanation": "Gross discrepancy between payment and ledger is explained by adjustment of 200.",
+    }
+
+    state = EvidenceState("TXN_002")
+    state.update("verify_discrepancy", gross_proof)
+    proven, data = has_sufficient_resolution_evidence(state, "BANK_AMOUNT_MISMATCH")
+    assert proven is False
+    assert data is None
+
+    # The same proof does settle the exception it is actually about.
+    matching = EvidenceState("TXN_002")
+    matching.update("verify_discrepancy", gross_proof)
+    proven, data = has_sufficient_resolution_evidence(matching, "GROSS_AMOUNT_MISMATCH")
+    assert proven is True
+    assert data["resolution_type"] == "ADJUSTMENT_EXPLAINED"
+
+
+def test_bank_identity_cannot_close_a_gross_mismatch_with_residual_gap():
+    """A balancing bank leg must not close a gross mismatch it does not account for.
+
+    Payment 10,000 vs ledger gross 12,000 is a 2,000 gap, but the documented
+    adjustment is only 500. The bank identity (11,900 - 500 == 11,400) balances
+    anyway, which previously produced a confidence-1.0 AUTO_RESOLVED with 1,500
+    still unexplained.
+    """
+    state = EvidenceState("TXN_G1")
+    state.update("get_payment_record", {"transaction_id": "TXN_G1", "amount": 10000})
+    state.update("get_ledger_record", {"transaction_id": "TXN_G1", "gross_amount": 12000, "fee": 100, "net_amount": 11900})
+    state.update("get_bank_records", {"bank_records": [{"transaction_id": "TXN_G1", "credited_amount": 11400}]})
+    state.update("get_adjustments", {"adjustments": [{"transaction_id": "TXN_G1", "amount": 500}]})
+
+    proven, data = has_sufficient_resolution_evidence(state, "GROSS_AMOUNT_MISMATCH")
+    assert proven is False
+    assert data is None
+
+    # The bank leg genuinely is explained, so a bank-side exception on the same
+    # evidence still resolves -- the gate is directional, not a blanket refusal.
+    proven, data = has_sufficient_resolution_evidence(state, "BANK_AMOUNT_MISMATCH")
+    assert proven is True
+    assert data["resolution_type"] == "ADJUSTMENT_EXPLAINED"
+
+
+def test_gross_identity_cannot_close_a_bank_mismatch_with_unexplained_shortfall():
+    """The mirror case: the gross identity says nothing about the bank shortfall.
+
+    Payment 10,000 - adjustment 500 == ledger gross 9,500 balances, but the bank
+    credited 8,000 against an expected 9,400, leaving 900 unaccounted for.
+    """
+    state = EvidenceState("TXN_B1")
+    state.update("get_payment_record", {"transaction_id": "TXN_B1", "amount": 10000})
+    state.update("get_ledger_record", {"transaction_id": "TXN_B1", "gross_amount": 9500, "fee": 100, "net_amount": 9400})
+    state.update("get_bank_records", {"bank_records": [{"transaction_id": "TXN_B1", "credited_amount": 8000}]})
+    state.update("get_adjustments", {"adjustments": [{"transaction_id": "TXN_B1", "amount": 500}]})
+
+    proven, data = has_sufficient_resolution_evidence(state, "BANK_AMOUNT_MISMATCH")
+    assert proven is False
+    assert data is None
+
+    proven, data = has_sufficient_resolution_evidence(state, "GROSS_AMOUNT_MISMATCH")
+    assert proven is True
+    assert data["resolution_type"] == "ADJUSTMENT_EXPLAINED"
 
 
 def test_pruned_investigator_prompt_payload():
@@ -150,7 +228,7 @@ def test_pruned_verifier_prompt_payload():
 
 
 def test_investigator_passes_max_tokens():
-    """Investigator passes max_tokens=300 to llm.chat()."""
+    """Investigator passes an explicit max_tokens budget to llm.chat()."""
     mock_llm = MagicMock(spec=LLMClient)
     mock_resp = MagicMock()
     mock_msg = MagicMock()
@@ -172,11 +250,13 @@ def test_investigator_passes_max_tokens():
 
     assert mock_llm.chat.called
     kwargs = mock_llm.chat.call_args[1]
-    assert kwargs.get("max_tokens") == 300
+    # 300 was too small for a tool-calling investigator: responses truncated
+    # mid-JSON and surfaced as parse failures, not as budget exhaustion.
+    assert kwargs.get("max_tokens") == INVESTIGATOR_MAX_TOKENS
 
 
 def test_verifier_passes_max_tokens():
-    """Verifier passes max_tokens=250 to llm.chat()."""
+    """Verifier passes an explicit max_tokens budget to llm.chat()."""
     mock_llm = MagicMock(spec=LLMClient)
     mock_resp = MagicMock()
     mock_msg = MagicMock()
@@ -210,4 +290,4 @@ def test_verifier_passes_max_tokens():
 
     assert mock_llm.chat.called
     kwargs = mock_llm.chat.call_args[1]
-    assert kwargs.get("max_tokens") == 250
+    assert kwargs.get("max_tokens") == VERIFIER_MAX_TOKENS

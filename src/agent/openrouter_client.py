@@ -10,11 +10,13 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from src.agent.rate_limit import LLMRateLimitError
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_REFERER = "https://github.com/cezzanrangrej/AI-Finance-Controller"
-DEFAULT_TITLE = "AI Finance Controller"
+DEFAULT_TITLE = "ReconPilot"
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 2.0
 REQUEST_TIMEOUT_SEC = 60.0
@@ -167,15 +169,30 @@ class OpenRouterLLMClient:
                         err_text = response.text[:300]
                         raise RuntimeError(f"OpenRouter API error ({status_code}): {err_text}")
 
-                    # Check for transient rate limit or server errors
-                    if status_code == 429 or status_code >= 500:
+                    # Rate limit — surface immediately for outer retry layer
+                    if status_code == 429:
+                        err_text = response.text[:300]
+                        retry_after = None
+                        ra_header = response.headers.get("Retry-After") or response.headers.get("retry-after")
+                        if ra_header:
+                            try:
+                                retry_after = float(ra_header)
+                            except (ValueError, TypeError):
+                                pass
+                        raise LLMRateLimitError(
+                            f"OpenRouter rate limit (429): {err_text}",
+                            retry_after=retry_after,
+                            provider="openrouter",
+                            status_code=429,
+                            attempt=attempt + 1,
+                        )
+
+                    # Server errors (5xx) — retry internally
+                    if status_code >= 500:
                         err_text = response.text[:300]
                         if attempt == MAX_RETRIES - 1:
                             raise RuntimeError(f"OpenRouter API error ({status_code}) after {MAX_RETRIES} attempts: {err_text}")
                         sleep_time = INITIAL_RETRY_DELAY * (2**attempt)
-                        if status_code == 429:
-                            sleep_time = max(sleep_time, 5.0)
-                            print(f"[Rate Limit] Pausing {sleep_time:.1f}s for OpenRouter quota window...", flush=True)
                         time.sleep(sleep_time)
                         continue
 

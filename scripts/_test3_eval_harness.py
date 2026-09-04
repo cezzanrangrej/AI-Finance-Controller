@@ -33,6 +33,13 @@ def load_csv(name):
         return list(csv.DictReader(f))
 
 
+def _pct(value):
+    """Formats an Optional rate. Every rate in EvaluationMetrics may be None
+    ("not measured"); ``f"{None:.2f}"`` raises TypeError, so the unmeasured
+    case is rendered as N/A rather than crashing the harness."""
+    return "N/A" if value is None else f"{value:.2f}%"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase1-only", action="store_true")
@@ -185,9 +192,10 @@ def main():
     all_fr = finish_reasons["investigator"] + finish_reasons["verifier"]
     print(f"All finish_reasons:         {all_fr}")
     print(f"All == 'stop':              {all(fr == 'stop' for fr in all_fr) if all_fr else 'N/A'}")
-    print(f"Decision accuracy:          {m.phase2_decision_accuracy:.2f}%")
-    print(f"Auto-resolution precision:  {m.auto_resolution_precision:.2f}%")
-    print(f"Auto-resolution recall:     {m.auto_resolution_recall:.2f}%")
+    print(f"Decision accuracy:          {_pct(m.phase2_decision_accuracy)}")
+    print(f"Auto-resolution precision:  {_pct(m.auto_resolution_precision)}")
+    print(f"Auto-resolution recall:     {_pct(m.auto_resolution_recall)}")
+    print(f"Labelled / unlabelled:      {m.phase2_labelled_cases} / {m.phase2_unlabelled_cases}")
     print(f"Auto-resolved (correct):    {m.auto_resolved_total} ({m.auto_resolved_correct})")
     print(f"Human-review total:         {m.human_review_total}")
     print(f"App-measured tokens:        investigator={inv_tot} verifier={ver_tot} total={inv_tot + ver_tot}")

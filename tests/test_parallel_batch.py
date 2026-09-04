@@ -31,6 +31,19 @@ def sample_data():
     return exceptions, ground_truth
 
 
+@pytest.fixture
+def scratch_resume_file(tmp_path):
+    """
+    Throwaway checkpoint path for tests that do not assert on resume contents.
+
+    These tests passed the literal ``"dummy.json"``, so every run wrote a
+    checkpoint into the repository root -- and that file is tracked, so the suite
+    dirtied the working tree on each invocation and the artifact was liable to be
+    committed as if it were source.
+    """
+    return str(tmp_path / "resume.json")
+
+
 class DummyTracer:
     def __init__(self):
         self.enabled = False
@@ -85,7 +98,7 @@ def test_batch_partitioning_and_no_duplicates(sample_data):
 
 # 8. Concurrent batches actually run concurrently
 @pytest.mark.asyncio
-async def test_concurrent_batches_overlap(tmp_path, sample_data):
+async def test_concurrent_batches_overlap(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 10, 5)] # 2 batches
     
@@ -120,7 +133,7 @@ async def test_concurrent_batches_overlap(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=10,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer()
     )
     t_end = asyncio.get_event_loop().time()
@@ -132,7 +145,7 @@ async def test_concurrent_batches_overlap(tmp_path, sample_data):
 
 # 9, 10, 11. SSE events, completion order independence, metrics updated
 @pytest.mark.asyncio
-async def test_sse_events_and_completion_order(tmp_path, sample_data):
+async def test_sse_events_and_completion_order(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 15, 5)] # 3 batches
     
@@ -184,7 +197,7 @@ async def test_sse_events_and_completion_order(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=15,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         event_callback=callback,
         tracer=DummyTracer()
     )
@@ -251,7 +264,7 @@ async def test_partial_persistence(tmp_path, sample_data):
 
 # 13 & 14. One failed batch doesn't kill others, NOT_EVALUATED handling
 @pytest.mark.asyncio
-async def test_failed_batch_does_not_halt_and_produces_not_evaluated(tmp_path, sample_data):
+async def test_failed_batch_does_not_halt_and_produces_not_evaluated(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 10, 5)] # 2 batches
 
@@ -285,7 +298,7 @@ async def test_failed_batch_does_not_halt_and_produces_not_evaluated(tmp_path, s
         client_model="demo",
         phase1_results=[],
         exception_count=10,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer()
     )
 
@@ -301,7 +314,7 @@ async def test_failed_batch_does_not_halt_and_produces_not_evaluated(tmp_path, s
 
 # 15. Token aggregation
 @pytest.mark.asyncio
-async def test_token_aggregation(tmp_path, sample_data):
+async def test_token_aggregation(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 10, 5)]
 
@@ -333,7 +346,7 @@ async def test_token_aggregation(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=10,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer()
     )
 
@@ -344,7 +357,7 @@ async def test_token_aggregation(tmp_path, sample_data):
 
 # 16. Latency aggregation
 @pytest.mark.asyncio
-async def test_latency_aggregation(tmp_path, sample_data):
+async def test_latency_aggregation(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 10, 5)]
 
@@ -381,7 +394,7 @@ async def test_latency_aggregation(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=10,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer()
     )
 
@@ -392,7 +405,7 @@ async def test_latency_aggregation(tmp_path, sample_data):
 
 # 17 & 18. Resume completed batches, no duplicate resume processing
 @pytest.mark.asyncio
-async def test_resume_completed_batches(tmp_path, sample_data):
+async def test_resume_completed_batches(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     chunks = [exceptions[i : i + 5] for i in range(0, 10, 5)] # 2 batches
 
@@ -425,7 +438,7 @@ async def test_resume_completed_batches(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=10,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer(),
         completed_batch_numbers=completed_batch_numbers,
         existing_decisions=existing_decisions
@@ -439,7 +452,7 @@ async def test_resume_completed_batches(tmp_path, sample_data):
 
 # 19. Thread/async-safe result merging
 @pytest.mark.asyncio
-async def test_thread_async_safe_merging(tmp_path, sample_data):
+async def test_thread_async_safe_merging(sample_data, scratch_resume_file):
     exceptions, ground_truth = sample_data
     # 5 batches of 5 cases
     chunks = [exceptions[i : i + 5] for i in range(0, 25, 5)]
@@ -472,7 +485,7 @@ async def test_thread_async_safe_merging(tmp_path, sample_data):
         client_model="demo",
         phase1_results=[],
         exception_count=25,
-        resume_file=str(tmp_path / "resume.json"),
+        resume_file=scratch_resume_file,
         tracer=DummyTracer()
     )
 
