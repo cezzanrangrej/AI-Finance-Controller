@@ -41,31 +41,42 @@ def prefetch_case_evidence(
     txn_id = exception_record.get("transaction_id", "UNKNOWN")
     exc_type = exception_record.get("reason", "UNKNOWN")
 
+    # Records which toolkit methods were actually invoked, so the audit trail
+    # can report real provenance instead of a placeholder.
+    tools_invoked: List[str] = []
+
+    tools_invoked.append("get_payment_record")
     payment = toolkit.get_payment_record(txn_id)
     if "error" in payment:
         payment = None
 
+    tools_invoked.append("get_ledger_record")
     ledger = toolkit.get_ledger_record(txn_id)
     if "error" in ledger:
         ledger = None
 
+    tools_invoked.append("get_bank_records")
     bank_info = toolkit.get_bank_records(txn_id)
     bank_records = bank_info.get("bank_records", []) if "error" not in bank_info else []
 
+    tools_invoked.append("get_adjustments")
     adj_info = toolkit.get_adjustments(txn_id)
     adjustments = adj_info.get("adjustments", []) if "error" not in adj_info else []
 
+    tools_invoked.append("check_for_duplicates")
     dup_info = toolkit.check_for_duplicates(txn_id)
     dup_check = dup_info if "error" not in dup_info else None
 
     exp_settle = None
     if ledger and ledger.get("gross_amount") is not None:
+        tools_invoked.append("calculate_expected_settlement")
         exp_res = toolkit.calculate_expected_settlement(txn_id)
         if "error" not in exp_res:
             exp_settle = exp_res
 
     adj_settle = None
     if ledger and ledger.get("gross_amount") is not None and adjustments:
+        tools_invoked.append("calculate_adjusted_expected_settlement")
         adj_res = toolkit.calculate_adjusted_expected_settlement(txn_id)
         if "error" not in adj_res:
             adj_settle = adj_res
@@ -80,6 +91,7 @@ def prefetch_case_evidence(
         duplicate_check=dup_check,
         expected_settlement=exp_settle,
         adjusted_expected_settlement=adj_settle,
+        tools_invoked=tools_invoked,
     )
 
 

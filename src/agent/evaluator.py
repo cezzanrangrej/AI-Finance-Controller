@@ -1,12 +1,124 @@
 """
 Ground-truth evaluation of Phase 1 and Phase 2 reconciliation decisions.
 
-Calculates Phase 1 accuracy, Phase 2 decision accuracy, Auto-Resolution Precision,
-and Auto-Resolution Recall against known synthetic ground truth.
+Calculates Phase 1 detection accuracy, Phase 2 decision accuracy, Auto-Resolution
+Precision, and Auto-Resolution Recall against known synthetic ground truth.
+
+Measurement policy: a rate whose denominator is zero is reported as None
+("not measured"), never as 100%. A metric nobody could verify must not read
+as a perfect score.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from src.agent.schemas import AgentDecision, EvaluationMetrics
+
+
+def _parse_bool_flag(value: Any) -> Optional[bool]:
+    """
+    Parses a ground-truth boolean that may arrive as a real bool or as CSV text.
+
+    Returns None for absent/unrecognised values so callers can distinguish
+    "labelled False" from "not labelled at all".
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "y"):
+        return True
+    if text in ("false", "0", "no", "n"):
+        return False
+    return None
+
+
+def _expected_is_exception(row: Dict[str, Any]) -> Optional[bool]:
+    """
+    Reads the ground-truth "should Phase 1 have flagged this" label.
+
+    Accepts either spelling in circulation: the explicit `is_phase1_exception`
+    boolean flag, or `expected_phase1_status` == "EXCEPTION". Returns None when
+    the row carries neither, so unlabelled rows are excluded from the
+    denominator rather than counted as clean.
+    """
+    flag = _parse_bool_flag(row.get("is_phase1_exception"))
+    if flag is not None:
+        return flag
+    status = row.get("expected_phase1_status") or row.get("expected_status")
+    if status is None:
+        return None
+    text = str(status).strip().upper()
+    if text == "EXCEPTION":
+        return True
+    if text == "RECONCILED":
+        return False
+    return None
+
+
+def compute_phase1_detection_metrics(
+    phase1_results: List[Dict[str, Any]],
+    ground_truth: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Measures the Phase 1 rule engine against the ground-truth exception label,
+    treating "flagged as an exception" as the positive class.
+
+    Deterministic does not mean correct: a rule set can miss a real break
+    (false negative) or flag a clean record (false positive). This function
+    measures that rather than assuming it away.
+
+    Returns all-None rates when no record carries a usable label.
+    """
+    actual_flagged: Dict[str, bool] = {
+        str(r.get("transaction_id", "")): (r.get("status") == "EXCEPTION")
+        for r in phase1_results
+    }
+
+    tp = fp = fn = tn = 0
+    labelled = 0
+
+    for row in ground_truth:
+        expected = _expected_is_exception(row)
+        if expected is None:
+            continue
+        txn_id = str(row.get("transaction_id", ""))
+        if txn_id not in actual_flagged:
+            continue
+        labelled += 1
+        flagged = actual_flagged[txn_id]
+        if expected and flagged:
+            tp += 1
+        elif expected and not flagged:
+            fn += 1
+        elif not expected and flagged:
+            fp += 1
+        else:
+            tn += 1
+
+    if labelled == 0:
+        return {
+            "phase1_accuracy": None,
+            "phase1_detection_precision": None,
+            "phase1_detection_recall": None,
+            "phase1_true_positives": 0,
+            "phase1_false_positives": 0,
+            "phase1_false_negatives": 0,
+            "phase1_labelled_records": 0,
+        }
+
+    precision = (tp / (tp + fp) * 100) if (tp + fp) > 0 else None
+    recall = (tp / (tp + fn) * 100) if (tp + fn) > 0 else None
+
+    return {
+        "phase1_accuracy": round((tp + tn) / labelled * 100, 2),
+        "phase1_detection_precision": round(precision, 2) if precision is not None else None,
+        "phase1_detection_recall": round(recall, 2) if recall is not None else None,
+        "phase1_true_positives": tp,
+        "phase1_false_positives": fp,
+        "phase1_false_negatives": fn,
+        "phase1_labelled_records": labelled,
+    }
+
 
 
 def partition_evaluation_runs(
@@ -145,9 +257,9 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
             "total_not_evaluated": 0,
             "auto_resolved": 0,
             "human_review": 0,
-            "decision_accuracy": 0.0,
-            "auto_resolution_precision": 100.0,
-            "auto_resolution_recall": 100.0,
+            "decision_accuracy": None,
+            "auto_resolution_precision": None,
+            "auto_resolution_recall": None,
             "human_review_rate": 0.0,
             "not_evaluated_rate": 0.0,
             "total_processing_time_sec": 0.0,
@@ -169,9 +281,10 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
     total_time = sum(r.get("phase2_time_sec", 0.0) for r in run_summaries)
     total_tokens = sum(r.get("total_tokens", 0) or 0 for r in run_summaries)
 
-    decision_accuracy = (total_correct / total_completed * 100) if total_completed > 0 else 0.0
-    precision = (total_auto_resolved_correct / total_auto_resolved * 100) if total_auto_resolved > 0 else 100.0
-    recall = (total_auto_resolved_correct / total_gt_auto_resolvable * 100) if total_gt_auto_resolvable > 0 else 100.0
+    # None, not 100.0: an empty denominator is an unmeasured rate.
+    decision_accuracy = (total_correct / total_completed * 100) if total_completed > 0 else None
+    precision = (total_auto_resolved_correct / total_auto_resolved * 100) if total_auto_resolved > 0 else None
+    recall = (total_auto_resolved_correct / total_gt_auto_resolvable * 100) if total_gt_auto_resolvable > 0 else None
     human_review_rate = (total_human_review / total_completed * 100) if total_completed > 0 else 0.0
     not_evaluated_rate = (total_not_evaluated / total_selected * 100) if total_selected > 0 else 0.0
     avg_latency = (total_time / total_completed) if total_completed > 0 else 0.0
@@ -184,9 +297,9 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
         "total_not_evaluated": total_not_evaluated,
         "auto_resolved": total_auto_resolved,
         "human_review": total_human_review,
-        "decision_accuracy": round(decision_accuracy, 2),
-        "auto_resolution_precision": round(precision, 2),
-        "auto_resolution_recall": round(recall, 2),
+        "decision_accuracy": round(decision_accuracy, 2) if decision_accuracy is not None else None,
+        "auto_resolution_precision": round(precision, 2) if precision is not None else None,
+        "auto_resolution_recall": round(recall, 2) if recall is not None else None,
         "human_review_rate": round(human_review_rate, 2),
         "not_evaluated_rate": round(not_evaluated_rate, 2),
         "total_processing_time_sec": round(total_time, 4),
@@ -202,6 +315,7 @@ def evaluate_agent_decisions(
     ground_truth: List[Dict[str, Any]],
     is_subset: bool = False,
     total_selected: Optional[int] = None,
+    phase1_results: Optional[List[Dict[str, Any]]] = None,
 ) -> EvaluationMetrics:
     """
     Evaluates agent decisions against known ground truth.
@@ -214,9 +328,13 @@ def evaluate_agent_decisions(
         ground_truth: List of ground truth dicts from the generator.
         is_subset: True if evaluating a subset of exceptions.
         total_selected: Number of cases selected for evaluation.
+        phase1_results: Full Phase 1 result rows. Supplied, Phase 1 detection
+            quality is measured against the ground-truth `is_phase1_exception`
+            flag; omitted, the Phase 1 rates come back None rather than assumed.
 
     Returns:
-        EvaluationMetrics object with accuracy, precision, scope-aware recall, and breakdown stats.
+        EvaluationMetrics with measured rates, or None for any rate whose
+        denominator is empty.
     """
     gt_index: Dict[str, Dict[str, Any]] = {
         row["transaction_id"]: row for row in ground_truth
@@ -280,28 +398,39 @@ def evaluate_agent_decisions(
             1 for row in ground_truth if row.get("expected_phase2_decision") == "AUTO_RESOLVED"
         )
 
-    phase1_accuracy = 100.0  # Phase 1 is 100% deterministic rules
-    phase2_accuracy = (correct_decisions / total_completed * 100) if total_completed > 0 else 0.0
+    # Phase 1 is deterministic, which is not the same as correct. Measure it
+    # against the ground-truth flag when we have the rows to measure with.
+    if phase1_results:
+        p1 = compute_phase1_detection_metrics(phase1_results, ground_truth)
+    else:
+        p1 = {
+            "phase1_accuracy": None,
+            "phase1_detection_precision": None,
+            "phase1_detection_recall": None,
+            "phase1_true_positives": 0,
+            "phase1_false_positives": 0,
+            "phase1_false_negatives": 0,
+            "phase1_labelled_records": 0,
+        }
 
-    precision = (
-        (auto_resolved_correct / auto_resolved_total * 100)
-        if auto_resolved_total > 0
-        else 100.0
-    )
-
-    recall = (
-        (auto_resolved_correct / gt_auto_resolvable * 100)
-        if gt_auto_resolvable > 0
-        else 100.0
-    )
+    # An empty denominator means unmeasured, not perfect.
+    phase2_accuracy = (correct_decisions / total_completed * 100) if total_completed > 0 else None
+    precision = (auto_resolved_correct / auto_resolved_total * 100) if auto_resolved_total > 0 else None
+    recall = (auto_resolved_correct / gt_auto_resolvable * 100) if gt_auto_resolvable > 0 else None
 
     selected_count = total_selected if total_selected is not None else len(agent_decisions)
 
     return EvaluationMetrics(
-        phase1_accuracy=phase1_accuracy,
-        phase2_decision_accuracy=phase2_accuracy,
-        auto_resolution_precision=precision,
-        auto_resolution_recall=recall,
+        phase1_accuracy=p1["phase1_accuracy"],
+        phase2_decision_accuracy=round(phase2_accuracy, 2) if phase2_accuracy is not None else None,
+        auto_resolution_precision=round(precision, 2) if precision is not None else None,
+        auto_resolution_recall=round(recall, 2) if recall is not None else None,
+        phase1_detection_precision=p1["phase1_detection_precision"],
+        phase1_detection_recall=p1["phase1_detection_recall"],
+        phase1_true_positives=p1["phase1_true_positives"],
+        phase1_false_positives=p1["phase1_false_positives"],
+        phase1_false_negatives=p1["phase1_false_negatives"],
+        phase1_labelled_records=p1["phase1_labelled_records"],
         agent_total_decisions=total_completed,
         agent_correct_decisions=correct_decisions,
         auto_resolved_correct=auto_resolved_correct,
@@ -331,7 +460,10 @@ def compute_phase2_metrics(
     not_evaluated = sum(1 for d in agent_decisions if d.decision == "NOT_EVALUATED")
 
     final_resolved = phase1_reconciled + auto_resolved
-    final_unresolved = human_review
+    # NOT_EVALUATED cases are unresolved. Counting only human_review here would
+    # silently drop cases the agent never managed to judge, breaking the
+    # final_resolved + final_unresolved == total_records invariant.
+    final_unresolved = human_review + not_evaluated
 
     initial_match_rate = (phase1_reconciled / total_records * 100) if total_records > 0 else 0.0
     agent_resolution_rate = (auto_resolved / phase1_exceptions * 100) if phase1_exceptions > 0 else 0.0

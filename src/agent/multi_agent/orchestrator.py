@@ -3,6 +3,7 @@ Multi-Agent Orchestrator — coordinates exception routing, Investigator Agent,
 Verifier Agent, deterministic arithmetic verification, and final safety policy execution.
 """
 
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,12 @@ from src.agent.controller import (
     LLMClient,
     build_proven_adjustment_resolution,
     has_sufficient_resolution_evidence,
+)
+from src.agent.provider_resolution import (
+    ProviderResolution,
+    build_role_clients,
+    format_resolution_banner,
+    resolve_providers,
 )
 from src.agent.multi_agent.investigator import InvestigatorAgent
 from src.agent.multi_agent.verifier import VerifierAgent
@@ -25,6 +32,8 @@ from src.agent.schemas import (
 )
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
+
+logger = logging.getLogger(__name__)
 
 
 class MultiAgentOrchestrator:
@@ -42,77 +51,26 @@ class MultiAgentOrchestrator:
         verifier_model: Optional[str] = None,
         max_tool_calls: int = 5,
         tracer: Optional[AgentTracer] = None,
+        resolution: Optional[ProviderResolution] = None,
     ) -> None:
         self.toolkit = toolkit
         self.tracer = tracer or default_tracer
-        self.provider = (provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
         self.api_key = api_key
-        self.tracer = tracer or default_tracer
 
-        # Resolve role providers
-        if provider == "demo":
-            inv_provider = "demo"
-            ver_provider = "demo"
-        else:
-            inv_provider = (os.getenv("INVESTIGATOR_PROVIDER") or provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
-            ver_provider = (os.getenv("VERIFIER_PROVIDER") or provider or os.getenv("LLM_PROVIDER") or "demo").strip().lower()
+        # Roles resolve independently; LLM_PROVIDER is a fallback, not a gate.
+        # See src/agent/provider_resolution.py for why this is centralized.
+        self.resolution = resolution or resolve_providers(
+            provider=provider,
+            api_key=api_key,
+            investigator_model=investigator_model,
+            verifier_model=verifier_model,
+        )
+        self.provider = self.resolution.provider_label
 
-        # Resolve Investigator role configuration
-        inv_key = (os.getenv("INVESTIGATOR_API_KEY") or (api_key if inv_provider == self.provider else None) or "").strip()
-        if not inv_key:
-            if inv_provider == "grok":
-                inv_key = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
-            elif inv_provider == "gemini":
-                inv_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-            elif inv_provider == "openrouter":
-                inv_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-
-        inv_model = (investigator_model or os.getenv("INVESTIGATOR_MODEL") or "").strip()
-        if not inv_model:
-            if inv_provider == "grok":
-                inv_model = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-beta").strip()
-            elif inv_provider == "gemini":
-                inv_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            elif inv_provider == "openrouter":
-                inv_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
-            elif inv_provider == "demo":
-                inv_model = "demo"
-
-        # Resolve Verifier role configuration
-        ver_key = (os.getenv("VERIFIER_API_KEY") or (api_key if ver_provider == self.provider else None) or "").strip()
-        if not ver_key:
-            if ver_provider == "gemini":
-                ver_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-            elif ver_provider == "grok":
-                ver_key = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
-            elif ver_provider == "openrouter":
-                ver_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-
-        ver_model = (verifier_model or os.getenv("VERIFIER_MODEL") or "").strip()
-        if not ver_model:
-            if ver_provider == "gemini":
-                ver_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            elif ver_provider == "grok":
-                ver_model = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-beta").strip()
-            elif ver_provider == "openrouter":
-                ver_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
-            elif ver_provider == "demo":
-                ver_model = "demo"
-
-        # Display Multi-Agent Configuration at startup
-        print("\n========================================")
-        print("Multi-Agent Configuration")
-        print("Investigator:")
-        print(f"  Provider: {inv_provider}")
-        print(f"  Model: {inv_model}")
-        print("Verifier:")
-        print(f"  Provider: {ver_provider}")
-        print(f"  Model: {ver_model}")
-        print("========================================\n")
+        logger.info("Multi-agent configuration:\n%s", format_resolution_banner(self.resolution))
 
         # Instantiate role-specific LLM clients
-        self.investigator_llm = LLMClient(provider=inv_provider, api_key=inv_key, model=inv_model)
-        self.verifier_llm = LLMClient(provider=ver_provider, api_key=ver_key, model=ver_model)
+        self.investigator_llm, self.verifier_llm = build_role_clients(self.resolution, LLMClient)
 
         self.investigator = InvestigatorAgent(
             toolkit=self.toolkit,
@@ -274,7 +232,7 @@ class MultiAgentOrchestrator:
         verifier_calls = getattr(self.verifier, "last_successful_calls", 0)
 
         # Check for provider failure on verifier
-        if verification.confidence == 0.0 and "Provider" in verification.reason:
+        if verification.confidence == 0.0 and "provider" in verification.reason.lower():
             if is_proven and proof_data:
                 # Deterministic proof overrides verifier technical error safely
                 decision = build_proven_adjustment_resolution(txn_id, exception_type, evidence, proof_data)

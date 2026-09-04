@@ -28,6 +28,21 @@ class AgentDecision(BaseModel):
     recommended_action: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # --- Provenance -------------------------------------------------------
+    # Who actually produced this decision, and at what cost. Recorded so the
+    # audit trail can distinguish a Decimal proof from an LLM consensus from an
+    # infrastructure failure, instead of crediting every outcome to "the agent".
+    agent_mode: Optional[str] = None
+    # e.g. DETERMINISTIC_PROOF, MULTI_AGENT_CONSENSUS, VERIFIER_ESCALATION,
+    # DISAGREEMENT_SAFEGUARD, INFRASTRUCTURE_FAILURE.
+    resolution_source: Optional[str] = None
+    investigator_proposal: Optional[Dict[str, Any]] = None
+    verification_result: Optional[Dict[str, Any]] = None
+    disagreement_detected: bool = False
+    investigator_calls: int = 0
+    verifier_calls: int = 0
+    model_interactions: int = 0
+
     @field_validator("confidence")
     @classmethod
     def confidence_must_be_in_range(cls, v: float) -> float:
@@ -137,12 +152,27 @@ class InvestigationLog(BaseModel):
 
 
 class EvaluationMetrics(BaseModel):
-    """Ground-truth evaluation metrics for Phase 1 & Phase 2 accuracy."""
+    """
+    Ground-truth evaluation metrics for Phase 1 & Phase 2 accuracy.
 
-    phase1_accuracy: float
-    phase2_decision_accuracy: float
-    auto_resolution_precision: float
-    auto_resolution_recall: float
+    Every rate is Optional. `None` means "not measurable from the supplied
+    ground truth" and must be rendered as N/A -- never substituted with 100%.
+    A metric with an empty denominator is unmeasured, not perfect.
+    """
+
+    phase1_accuracy: Optional[float] = None
+    phase2_decision_accuracy: Optional[float] = None
+    auto_resolution_precision: Optional[float] = None
+    auto_resolution_recall: Optional[float] = None
+
+    # Phase 1 detection quality, measured against the ground-truth
+    # `is_phase1_exception` flag. None when the flag is absent.
+    phase1_detection_precision: Optional[float] = None
+    phase1_detection_recall: Optional[float] = None
+    phase1_true_positives: int = 0
+    phase1_false_positives: int = 0
+    phase1_false_negatives: int = 0
+    phase1_labelled_records: int = 0
 
     # Raw counts
     agent_total_decisions: int
@@ -174,6 +204,10 @@ class BatchInvestigationCase(BaseModel):
     duplicate_check: Optional[Dict[str, Any]] = None
     expected_settlement: Optional[Dict[str, Any]] = None
     adjusted_expected_settlement: Optional[Dict[str, Any]] = None
+    # Toolkit methods actually invoked while gathering the evidence above.
+    # Recorded so the audit trail reports real provenance rather than a
+    # placeholder label.
+    tools_invoked: List[str] = Field(default_factory=list)
 
 
 class BatchAgentResponse(BaseModel):
@@ -195,12 +229,20 @@ class BatchInvestigationLog(BaseModel):
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
     llm_interactions: int = 1
+    # Cases the batch call missed and that were retried per-case.
     fallback_count: int = 0
     fallback_transaction_ids: List[str] = Field(default_factory=list)
+    # Cases that could not be assessed at all (batch + fallback both failed).
+    # Tracked separately from fallback_count: a fallback that succeeded produced
+    # a real judgment, a NOT_EVALUATED case produced none.
+    not_evaluated_count: int = 0
+    not_evaluated_transaction_ids: List[str] = Field(default_factory=list)
     decisions: List[AgentDecision] = Field(default_factory=list)
     partition_strategy: str = "balanced_exception_type"
     exception_type_counts: Dict[str, int] = Field(default_factory=dict)
     case_count: Optional[int] = None
+    # transaction_id -> toolkit methods actually invoked for that case.
+    tool_provenance: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class BatchStatus(BaseModel):

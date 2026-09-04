@@ -14,7 +14,7 @@ export default function ExceptionsView({ exceptions, onSelectTransaction }) {
   }
 
   const filtered = exceptions.filter((e) => {
-    if (filterType === 'HUMAN_REVIEW' && e.decision !== 'HUMAN_REVIEW') return false;
+    if (filterType === 'HUMAN_REVIEW' && !(e.decision === 'HUMAN_REVIEW' || e.decision === 'NOT_EVALUATED')) return false;
     if (filterType === 'AUTO_RESOLVED' && e.decision !== 'AUTO_RESOLVED') return false;
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -27,7 +27,7 @@ export default function ExceptionsView({ exceptions, onSelectTransaction }) {
     return true;
   });
 
-  const humanReviewCount = exceptions.filter((e) => e.decision === 'HUMAN_REVIEW').length;
+  const humanReviewCount = exceptions.filter((e) => e.decision === 'HUMAN_REVIEW' || e.decision === 'NOT_EVALUATED').length;
   const autoResolvedCount = exceptions.filter((e) => e.decision === 'AUTO_RESOLVED').length;
 
   return (

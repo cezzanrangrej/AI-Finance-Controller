@@ -67,7 +67,7 @@ class InvestigatorAgent:
 
         while tool_call_count < self.max_tool_calls:
             try:
-                response = self.llm.chat(messages=messages, tools=tool_definitions)
+                response = self.llm.chat(messages=messages, tools=tool_definitions, max_tokens=300)
                 self.last_successful_calls += 1
             except Exception as e:
                 self.tracer.provider_error("Investigator", prov_name, "API_ERROR", "NOT_EVALUATED", str(e))
@@ -333,6 +333,12 @@ class InvestigatorAgent:
             return str(result.get("calculation", ""))
         elif tool_name == "check_for_duplicates":
             return f"is_duplicate: {result.get('is_duplicate', False)}"
+        elif tool_name == "verify_discrepancy":
+            return f"explained={result.get('discrepancy_fully_explained', False)}, diff={result.get('resolved_difference')}"
+        elif tool_name == "check_record_presence":
+            return f"missing={result.get('missing_records', [])}, refs_valid={result.get('adjustment_references_valid', True)}"
+        elif tool_name == "check_date_consistency":
+            return f"dates_consistent={result.get('dates_consistent', True)}, max_delta={result.get('max_day_difference', 0)}d"
         return str(result)[:200]
 
     @staticmethod
@@ -370,3 +376,14 @@ class InvestigatorAgent:
             count = result.get("duplicate_count", 0)
             if count > 1:
                 evidence.append(f"Duplicate check: {count} bank records found (duplicate=True)")
+        elif tool_name == "verify_discrepancy":
+            exp = result.get("explanation")
+            if exp:
+                evidence.append(f"Deterministic verification: {exp}")
+        elif tool_name == "check_record_presence":
+            missing = result.get("missing_records", [])
+            if missing:
+                evidence.append(f"Missing records: {', '.join(missing)}")
+        elif tool_name == "check_date_consistency":
+            if not result.get("dates_consistent", True):
+                evidence.append(f"Date check: {result.get('details', 'Date inconsistency detected')}")

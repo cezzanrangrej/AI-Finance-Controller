@@ -64,9 +64,21 @@ export default function RunsView({ runs, activeRunId, onSelectRun, onTriggerRun,
                       {new Date(r.created_at).toLocaleString()}
                     </td>
                     <td className="py-3 px-4">
-                      <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-surface-alt text-text-secondary border border-border">
-                        Multi-Agent · {r.llm_provider || 'demo'}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-surface-alt text-text-secondary border border-border">
+                          Multi-Agent · {r.llm_provider || 'demo'}
+                        </span>
+                        {/* A degraded run fell back to the offline emulator mid-config;
+                            its decisions must not read as real-model output. */}
+                        {r.llm_degraded && (
+                          <span
+                            title={r.llm_degraded_reason || 'A role fell back to the offline demo engine.'}
+                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-coral/10 text-accent-coral border border-accent-coral/30 font-semibold"
+                          >
+                            DEGRADED
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-right font-mono text-text">
                       {r.total_records}

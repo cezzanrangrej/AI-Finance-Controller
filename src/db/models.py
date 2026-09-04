@@ -3,7 +3,7 @@ SQLAlchemy ORM models for database persistence.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from src.db.database import Base
@@ -26,12 +26,25 @@ class RunModel(Base):
     agent_resolution_rate = Column(Float, nullable=False)
     final_resolution_rate = Column(Float, nullable=False)
 
-    # Evaluation metrics
+    # Evaluation metrics. All nullable: NULL means "not measured" (no ground
+    # truth supplied for this run) and must render as N/A, never as 100%.
     phase1_accuracy = Column(Float, nullable=True)
     phase2_accuracy = Column(Float, nullable=True)
     auto_resolution_precision = Column(Float, nullable=True)
     auto_resolution_recall = Column(Float, nullable=True)
     ground_truth_accuracy = Column(Float, nullable=True)
+    has_ground_truth = Column(Boolean, nullable=False, default=False)
+
+    # Phase 1 detection quality vs the ground-truth is_phase1_exception flag
+    phase1_detection_precision = Column(Float, nullable=True)
+    phase1_detection_recall = Column(Float, nullable=True)
+    phase1_false_positives = Column(Integer, nullable=True)
+    phase1_false_negatives = Column(Integer, nullable=True)
+
+    # Honest exception accounting: cases the agent could not assess at all,
+    # kept separate from cases it deliberately escalated to a human.
+    not_evaluated = Column(Integer, nullable=False, default=0)
+    degraded_cases = Column(Integer, nullable=False, default=0)
 
     # LLM Provider Metadata & Token Usage
     llm_provider = Column(String(20), nullable=True)
@@ -44,6 +57,12 @@ class RunModel(Base):
     llm_cases_completed = Column(Integer, nullable=True)
     llm_cases_not_evaluated = Column(Integer, nullable=True)
 
+    # True when a role silently fell back to the offline demo engine because its
+    # provider credentials were unusable. Persisted so a run's decisions can
+    # never be mistaken for real-model output after the fact.
+    llm_degraded = Column(Boolean, nullable=False, default=False)
+    llm_degraded_reason = Column(String(500), nullable=True)
+
     # Multi-run Evaluation Group Metadata
     evaluation_group_id = Column(String(50), nullable=True, index=True)
     evaluation_run_number = Column(Integer, nullable=True)
@@ -55,8 +74,15 @@ class RunModel(Base):
     phase2_time_sec = Column(Float, nullable=True)
     end_to_end_time_sec = Column(Float, nullable=True)
     total_processing_time_sec = Column(Float, nullable=True)
+    # records_per_second is the END-TO-END rate over all records. The
+    # phase-specific rates are stored separately so neither can be mistaken
+    # for the other.
     records_per_second = Column(Float, nullable=True)
+    phase1_records_per_second = Column(Float, nullable=True)
+    phase2_cases_per_second = Column(Float, nullable=True)
     average_time_per_record_sec = Column(Float, nullable=True)
+    average_case_latency_sec = Column(Float, nullable=True)
+    tokens_per_case = Column(Float, nullable=True)
 
     transactions = relationship("TransactionResultModel", back_populates="run", cascade="all, delete-orphan")
     investigations = relationship("AgentInvestigationModel", back_populates="run", cascade="all, delete-orphan")

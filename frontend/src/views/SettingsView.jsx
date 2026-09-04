@@ -35,14 +35,21 @@ export default function SettingsView({ settings, onUpdateSettings, metrics }) {
             <div className="space-y-1 text-xs">
               <label className="text-text-secondary font-medium block">LLM Provider</label>
               <select
-                value={settings?.provider || 'gemini'}
+                value={settings?.provider ?? ''}
                 onChange={(e) => handleChange('provider', e.target.value)}
                 className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-xs text-text outline-none focus:border-primary font-mono"
               >
-                <option value="gemini">Gemini API (Default)</option>
-                <option value="demo">Demo Mode (Offline Fast)</option>
+                <option value="">Server Default (from .env)</option>
+                <option value="gemini">Gemini API</option>
                 <option value="openrouter">OpenRouter</option>
+                <option value="grok">Grok / xAI</option>
+                <option value="demo">Demo Mode (Offline Fast)</option>
               </select>
+              <p className="text-[10px] text-text-secondary/70 leading-snug pt-0.5">
+                Fallback for both agents. INVESTIGATOR_PROVIDER / VERIFIER_PROVIDER in the
+                server .env take precedence per role, and work on their own without this
+                set. Selecting Demo Mode forces both agents offline regardless of those.
+              </p>
             </div>
 
             {/* Unified Architecture Indicator */}

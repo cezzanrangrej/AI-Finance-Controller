@@ -25,9 +25,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
-  // Advanced developer settings
+  // Advanced developer settings.
+  // Empty provider = inherit the backend's configured LLM_PROVIDER / role overrides.
   const [settings, setSettings] = useState({
-    provider: 'gemini',
+    provider: '',
     batchSize: 5,
   });
 
@@ -37,6 +38,9 @@ export default function App() {
     ledger: null,
     bank: null,
     adjustments: null,
+    // Optional scoring key, not a data source. Supplied, the run reports
+    // measured accuracy; omitted, the accuracy fields come back as N/A.
+    groundTruth: null,
   });
 
   // Custom Hook: Single source of truth for active run data

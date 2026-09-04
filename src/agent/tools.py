@@ -5,6 +5,7 @@ All tools are READ-ONLY. No tool may modify payment, ledger, bank, or adjustment
 The agent must request information through these explicit interfaces.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 from src.utils.formatters import safe_decimal, safe_int, safe_numeric
@@ -274,6 +275,149 @@ class FinancialToolkit:
             "credited_amounts": [self._safe_numeric(r.get("credited_amount")) for r in records],
         }
 
+    def verify_discrepancy(self, transaction_id: str) -> Dict[str, Any]:
+        """
+        Deterministically evaluates whether documented adjustments explain amount discrepancies.
+        Pre-computes exact comparison flags so the agent never performs arithmetic or comparisons.
+        """
+        payment = self._payments.get(transaction_id)
+        ledger = self._ledger.get(transaction_id)
+        bank_records = self._bank.get(transaction_id, [])
+        adjustments = self._adjustments.get(transaction_id, [])
+
+        p_dec = self._safe_decimal(payment.get("amount")) if payment else None
+        gross_dec = self._safe_decimal(ledger.get("gross_amount")) if ledger else None
+        fee_dec = self._safe_decimal(ledger.get("fee")) if ledger else None
+        net_dec = self._safe_decimal(ledger.get("net_amount")) if ledger else None
+
+        expected_net_dec = (gross_dec - fee_dec) if (gross_dec is not None and fee_dec is not None) else None
+        single_bank = bank_records[0] if len(bank_records) == 1 else None
+        bank_dec = self._safe_decimal(single_bank.get("credited_amount")) if single_bank else None
+
+        adj_dec = sum((self._safe_decimal(a.get("amount")) or Decimal(0)) for a in adjustments)
+        adj_count = len(adjustments)
+
+        is_duplicate = len(bank_records) > 1
+
+        bank_explained = False
+        gross_explained = False
+        explanation = ""
+        resolved_diff = None
+
+        if is_duplicate:
+            explanation = f"Multiple ({len(bank_records)}) bank records found; requires human review."
+        elif expected_net_dec is not None and bank_dec is not None and adj_dec > 0 and (expected_net_dec - adj_dec) == bank_dec:
+            bank_explained = True
+            resolved_diff = self._safe_numeric(adj_dec)
+            explanation = f"Bank credit ({self._safe_numeric(bank_dec)}) exactly matches expected settlement ({self._safe_numeric(expected_net_dec)}) minus documented adjustments ({self._safe_numeric(adj_dec)})."
+        elif p_dec is not None and gross_dec is not None and adj_dec > 0 and ((p_dec - adj_dec) == gross_dec or (gross_dec - adj_dec) == p_dec):
+            gross_explained = True
+            resolved_diff = self._safe_numeric(adj_dec)
+            explanation = f"Gross discrepancy between payment ({self._safe_numeric(p_dec)}) and ledger ({self._safe_numeric(gross_dec)}) is exactly explained by adjustment of {self._safe_numeric(adj_dec)}."
+        elif expected_net_dec is not None and bank_dec is not None:
+            diff = self._safe_numeric(expected_net_dec - bank_dec)
+            explanation = f"Bank discrepancy of {diff} is not explained by documented adjustments (total: {self._safe_numeric(adj_dec)})."
+        else:
+            explanation = "Insufficient records to establish discrepancy explanation."
+
+        ledger_calc_correct = (gross_dec - fee_dec == net_dec) if (gross_dec is not None and fee_dec is not None and net_dec is not None) else None
+
+        return {
+            "transaction_id": transaction_id,
+            "discrepancy_fully_explained": bank_explained or gross_explained,
+            "match_type": "BANK_ADJUSTMENT" if bank_explained else ("GROSS_ADJUSTMENT" if gross_explained else "NONE"),
+            "resolved_difference": resolved_diff,
+            "is_duplicate_bank": is_duplicate,
+            "bank_records_count": len(bank_records),
+            "total_adjustments": self._safe_numeric(adj_dec),
+            "adjustments_count": adj_count,
+            "expected_settlement": self._safe_numeric(expected_net_dec),
+            "bank_credited_amount": self._safe_numeric(bank_dec),
+            "ledger_calculation_correct": ledger_calc_correct,
+            "explanation": explanation,
+        }
+
+    def check_record_presence(self, transaction_id: str) -> Dict[str, Any]:
+        """
+        Deterministically checks presence and reference validity across all record sources.
+        """
+        p = self._payments.get(transaction_id)
+        l = self._ledger.get(transaction_id)
+        b = self._bank.get(transaction_id, [])
+        a = self._adjustments.get(transaction_id, [])
+
+        missing = []
+        if not p:
+            missing.append("PAYMENT")
+        if not l:
+            missing.append("LEDGER")
+        if not b:
+            missing.append("BANK")
+
+        refs_valid = True
+        for adj in a:
+            ref = str(adj.get("reference") or adj.get("transaction_id") or "")
+            if transaction_id not in ref and not ref.startswith("ADJ"):
+                refs_valid = False
+
+        return {
+            "transaction_id": transaction_id,
+            "has_payment": p is not None,
+            "has_ledger": l is not None,
+            "has_bank": len(b) > 0,
+            "has_adjustments": len(a) > 0,
+            "missing_records": missing,
+            "bank_records_count": len(b),
+            "adjustment_count": len(a),
+            "adjustment_references_valid": refs_valid,
+        }
+
+    def check_date_consistency(self, transaction_id: str) -> Dict[str, Any]:
+        """
+        Deterministically verifies date alignment across transaction sources without LLM date math.
+        """
+        p = self._payments.get(transaction_id)
+        l = self._ledger.get(transaction_id)
+        b = self._bank.get(transaction_id, [])
+        a = self._adjustments.get(transaction_id, [])
+
+        def parse_date(d_str: Any) -> Optional[datetime]:
+            if not d_str:
+                return None
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(str(d_str)[:10], fmt)
+                except Exception:
+                    continue
+            return None
+
+        p_date = parse_date(p.get("date")) if p else None
+        l_date = parse_date(l.get("date")) if l else None
+        b_dates = [parse_date(rec.get("date")) for rec in b if rec.get("date")]
+        b_dates = [d for d in b_dates if d is not None]
+        a_dates = [parse_date(rec.get("date")) for rec in a if rec.get("date")]
+        a_dates = [d for d in a_dates if d is not None]
+
+        max_delta_days = 0
+        all_dates = [d for d in [p_date, l_date] + b_dates + a_dates if d is not None]
+        if len(all_dates) >= 2:
+            min_date = min(all_dates)
+            max_date = max(all_dates)
+            max_delta_days = (max_date - min_date).days
+
+        dates_consistent = max_delta_days <= 30
+
+        return {
+            "transaction_id": transaction_id,
+            "dates_consistent": dates_consistent,
+            "payment_date": p.get("date") if p else None,
+            "ledger_date": l.get("date") if l else None,
+            "bank_dates": [r.get("date") for r in b if r.get("date")],
+            "adjustment_dates": [r.get("date") for r in a if r.get("date")],
+            "max_day_difference": max_delta_days,
+            "details": f"All recorded event dates are within {max_delta_days} day(s)." if dates_consistent else f"Dates span {max_delta_days} days, exceeding typical settlement window.",
+        }
+
     # ------------------------------------------------------------------
     # OpenAI function-calling schema (tool registry for LLM)
     # ------------------------------------------------------------------
@@ -393,6 +537,48 @@ class FinancialToolkit:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "verify_discrepancy",
+                    "description": "Deterministically evaluates whether documented adjustments mathematically explain the discrepancy for BANK_AMOUNT_MISMATCH or GROSS_AMOUNT_MISMATCH, and checks ledger calculation integrity. Always use this tool rather than computing or comparing numbers yourself.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "transaction_id": {"type": "string", "description": "The transaction ID."}
+                        },
+                        "required": ["transaction_id"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_record_presence",
+                    "description": "Deterministically checks which records exist across payment, ledger, and bank, and verifies adjustment reference validity.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "transaction_id": {"type": "string", "description": "The transaction ID."}
+                        },
+                        "required": ["transaction_id"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_date_consistency",
+                    "description": "Deterministically computes day deltas between payment, ledger, bank settlement, and adjustment dates without manual date math.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "transaction_id": {"type": "string", "description": "The transaction ID."}
+                        },
+                        "required": ["transaction_id"],
+                    },
+                },
+            },
         ]
 
     def dispatch(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -406,6 +592,9 @@ class FinancialToolkit:
             "calculate_expected_settlement": self.calculate_expected_settlement,
             "calculate_adjusted_expected_settlement": self.calculate_adjusted_expected_settlement,
             "check_for_duplicates": self.check_for_duplicates,
+            "verify_discrepancy": self.verify_discrepancy,
+            "check_record_presence": self.check_record_presence,
+            "check_date_consistency": self.check_date_consistency,
         }
         if tool_name not in tool_map:
             raise ValueError(f"Unknown tool: '{tool_name}'.")

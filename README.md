@@ -179,16 +179,24 @@ Verifier Agent  ────►  Independently Reviews Proposal & Evidence
 Final Controller  ────►  Applies Disagreement Policy (AUTO_RESOLVED vs. HUMAN_REVIEW)
 ```
 
-Role-specific LLM providers and models can be assigned independently via environment variables:
+Role-specific LLM providers and models are assigned independently via environment
+variables. The role variables are sufficient on their own -- `LLM_PROVIDER` is not
+required:
 
 ```ini
-# Role-Specific Provider Configuration Concept
 INVESTIGATOR_PROVIDER=gemini
 INVESTIGATOR_MODEL=gemini-3.6-flash
 
 VERIFIER_PROVIDER=openrouter
 VERIFIER_MODEL=meta-llama/llama-3.3-70b-instruct
 ```
+
+Each role resolves separately, so a missing Verifier key does not take the
+Investigator offline with it. When a role names a provider whose key or model is
+unusable, that role alone falls back to the offline demo engine, a `WARNING` is
+logged, and the run is persisted with `llm_degraded=true` so its decisions are never
+mistaken for real-model output. See [Provider Configuration](#provider-configuration)
+for the full resolution order.
 
 ---
 
@@ -198,7 +206,59 @@ The system supports four provider configurations:
 1. **Offline Demo Engine**: Local rule-based emulator requiring zero external API keys.
 2. **Google Gemini**: Direct integration via Gemini API (`gemini-2.5-flash`, `gemini-3.6-flash`).
 3. **OpenRouter**: Access to open-weights models (`meta-llama/llama-3.3-70b-instruct`, etc.).
-4. **Grok / xAI**: Direct integration for xAI models (`grok-2-latest`).
+4. **Grok / xAI**: Direct integration for xAI models (`grok-2-latest`). `XAI_API_KEY` and
+   `XAI_MODEL` are accepted as aliases.
+
+`agentrouter` is also supported, reusing the OpenRouter client against a different base URL.
+
+### Provider Configuration
+
+All resolution runs through `src/agent/provider_resolution.py`, which the API and both
+controllers share. For each role, the provider is taken from the first of:
+
+1. An explicit argument passed by the caller (for example the API's `provider` field).
+2. `INVESTIGATOR_PROVIDER` / `VERIFIER_PROVIDER`.
+3. `LLM_PROVIDER`, which acts as a **fallback for roles left blank**, not as an on/off gate.
+4. Inference from whichever provider credentials are present.
+5. The offline demo engine.
+
+The key and model are then read from the role-scoped variables first
+(`INVESTIGATOR_API_KEY`, `VERIFIER_MODEL`, ...), falling back to the provider's shared
+variables (`GEMINI_API_KEY`, `OPENROUTER_MODEL`, ...). Gemini and Grok carry default
+models; OpenRouter and AgentRouter do not, so those need a model set explicitly.
+
+So all three of these are valid:
+
+```ini
+# a) One provider for both roles
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+
+# b) Role variables alone -- no LLM_PROVIDER needed
+INVESTIGATOR_PROVIDER=openrouter
+INVESTIGATOR_API_KEY=...
+INVESTIGATOR_MODEL=meta-llama/llama-3.3-70b-instruct
+VERIFIER_PROVIDER=gemini
+VERIFIER_API_KEY=...
+
+# c) Both -- role values win, LLM_PROVIDER covers the role left blank
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+INVESTIGATOR_PROVIDER=grok
+GROK_API_KEY=...
+```
+
+### Offline Demo Mode
+
+`DEMO_MODE=true` is a hard kill switch. Both agents run against the local rule-based
+emulator and no external API is contacted, regardless of any provider or key configured
+alongside it. Use it for key-less demos and deterministic tests. `LLM_PROVIDER=demo`
+remains supported and behaves the same way.
+
+An explicitly requested demo run is not a degradation and logs no warning. A run that
+lands on demo because credentials were unusable is, and is flagged as such
+(`llm_degraded`, `llm_degraded_reason`) on the run record and in the metrics and run
+summary API responses.
 
 ---
 
@@ -472,10 +532,11 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-Edit `.env` to configure providers (or leave as `demo` for key-less operation):
+Edit `.env` to configure providers, or leave demo mode on for key-less operation:
 ```ini
-LLM_PROVIDER=demo
+DEMO_MODE=true
 ```
+See [Provider Configuration](#provider-configuration) for live-provider setup.
 
 ### 4. Build Frontend
 ```bash

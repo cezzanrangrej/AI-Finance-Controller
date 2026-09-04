@@ -121,6 +121,7 @@ class GrokLLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
     ) -> GrokResponse:
         """
         Sends a chat completion request to xAI Grok with retries and tool calling support.
@@ -136,6 +137,8 @@ class GrokLLMClient:
             "messages": messages,
             "temperature": 0.0,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         if tools:
             payload["tools"] = tools
