@@ -32,19 +32,36 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Finance Controller API",
+    title="ReconPilot API",
     description="Multi-source financial reconciliation and AI exception investigation platform API.",
     version="3.0.0",
     lifespan=lifespan,
 )
 
 
-# Enable CORS for React frontend development server
+# CORS for the React dev server.
+#
+# `allow_origins=["*"]` together with `allow_credentials=True` is invalid per the
+# CORS spec -- a wildcard Access-Control-Allow-Origin cannot be combined with
+# credentials -- and would let any site on the internet drive this API from a
+# logged-in browser. Origins are therefore explicit, and credentials are only
+# enabled when a concrete allow-list is configured.
+_default_dev_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+_configured_origins = [
+    o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()
+]
+_allow_origins = _configured_origins or _default_dev_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_allow_origins,
+    allow_credentials=bool(_configured_origins),
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -67,7 +84,7 @@ app.add_api_route("/api/upload/", runs.create_run_from_upload, methods=["POST"],
 @app.get("/api/health")
 def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "service": "AI Finance Controller API", "version": "3.0.0"}
+    return {"status": "ok", "service": "ReconPilot API", "version": "3.0.0"}
 
 
 

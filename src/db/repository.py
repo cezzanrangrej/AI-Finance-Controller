@@ -6,7 +6,8 @@ import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
-from src.db.models import AdjustmentModel, AgentInvestigationModel, GroundTruthModel, RunModel, TransactionResultModel
+from src.db.models import AdjustmentModel, AgentInvestigationModel, RunModel, TransactionResultModel
+from src.utils.formatters import safe_float
 
 
 class FinanceRepository:
@@ -47,17 +48,32 @@ class FinanceRepository:
 
     @staticmethod
     def save_adjustments(db: Session, run_id: str, adjustments: List[Dict[str, Any]]) -> None:
-        """Bulk inserts source adjustment records."""
+        """
+        Bulk inserts source adjustment records.
+
+        Tolerant of real-world adjustment CSVs: only transaction_id,
+        adjustment_type and amount are validated at upload, so `reason` may be
+        absent and `amount` may carry currency symbols or thousands separators.
+        Parsing defensively here matters because this runs *after* Phase 2 --
+        a KeyError or ValueError at this point would discard a completed run
+        whose LLM cost has already been incurred.
+        """
         objects = []
         for adj in adjustments:
-            amt = float(adj["amount"]) if adj.get("amount") is not None else 0.0
+            amt = safe_float(adj.get("amount"))
+            if amt is None:
+                amt = 0.0
+            adj_type = str(adj.get("adjustment_type") or "UNSPECIFIED")[:50]
+            reason = adj.get("reason")
+            if reason is None or str(reason).strip() == "":
+                reason = f"{adj_type} adjustment (no reason supplied in source file)"
             objects.append(
                 AdjustmentModel(
                     run_id=run_id,
-                    transaction_id=adj["transaction_id"],
-                    adjustment_type=adj["adjustment_type"],
+                    transaction_id=str(adj.get("transaction_id") or "UNKNOWN"),
+                    adjustment_type=adj_type,
                     amount=amt,
-                    reason=adj["reason"],
+                    reason=str(reason),
                     date=adj.get("date"),
                     reference=adj.get("reference"),
                 )

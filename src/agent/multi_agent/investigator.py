@@ -8,12 +8,18 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.agent.json_utils import repair_and_parse_json
 from src.agent.controller import EvidenceState, LLMClient, has_sufficient_resolution_evidence
 from src.agent.prompts import INVESTIGATOR_SYSTEM_PROMPT, build_investigator_prompt
 from src.agent.schemas import InvestigationProposal, ToolCallTrace
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
 from src.utils.formatters import format_currency
+
+#: Completion budget for one Investigator turn. Was 300, which truncated the
+#: proposal JSON mid-object on cases with several tool calls; the resulting
+#: parse error was indistinguishable from a malformed model response.
+INVESTIGATOR_MAX_TOKENS = 1200
 
 
 class InvestigatorAgent:
@@ -67,7 +73,7 @@ class InvestigatorAgent:
 
         while tool_call_count < self.max_tool_calls:
             try:
-                response = self.llm.chat(messages=messages, tools=tool_definitions, max_tokens=300)
+                response = self.llm.chat(messages=messages, tools=tool_definitions, max_tokens=INVESTIGATOR_MAX_TOKENS)
                 self.last_successful_calls += 1
             except Exception as e:
                 self.tracer.provider_error("Investigator", prov_name, "API_ERROR", "NOT_EVALUATED", str(e))
@@ -83,6 +89,7 @@ class InvestigatorAgent:
                     tool_history=tools_used,
                     reason=f"Provider request failed: {str(e)[:200]}",
                     recommended_action="Investigation not completed due to provider API failure.",
+                    provider_failed=True,
                 )
                 return proposal, evidence, tool_traces, evidence_state, tool_call_count
 
@@ -266,17 +273,9 @@ class InvestigatorAgent:
     ) -> InvestigationProposal:
         """Parses and validates LLM output into an InvestigationProposal."""
         try:
-            cleaned = content.strip()
-            if "```" in cleaned:
-                match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-                if match:
-                    cleaned = match.group(1)
-            if "{" in cleaned and "}" in cleaned:
-                start = cleaned.find("{")
-                end = cleaned.rfind("}") + 1
-                cleaned = cleaned[start:end]
-
-            data = json.loads(cleaned)
+            data = repair_and_parse_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("Parsed proposal content is not a dictionary")
             data.setdefault("transaction_id", txn_id)
             data.setdefault("exception_type", exception_type)
             data.setdefault("evidence", evidence or [f"Phase 1 exception: {exception_type}"])

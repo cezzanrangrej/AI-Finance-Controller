@@ -176,11 +176,6 @@ class ReconciliationEngine:
             result["status"] = "EXCEPTION"
             result["reason"] = "UNCLASSIFIED_DISCREPANCY"
             result["difference"] = None
-
-        # All checks passed
-        result["status"] = "RECONCILED"
-        result["reason"] = None
-        result["difference"] = 0
         return result
 
     @classmethod

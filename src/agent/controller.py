@@ -21,6 +21,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from decimal import Decimal
+from src.agent.json_utils import repair_and_parse_json
 from src.agent.prompts import SYSTEM_PROMPT, build_investigation_prompt
 from src.config import settings
 from src.agent.schemas import AgentDecision, InvestigationLog, ToolCallTrace
@@ -510,7 +511,7 @@ class LLMClient:
                     "GEMINI_API_KEY is missing. "
                     "Set GEMINI_API_KEY in environment or configure provider=demo for Demo Mode."
                 )
-            gem_model = (model or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+            gem_model = (model or os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
             if not gem_model:
                 raise ValueError("GEMINI_MODEL is missing.")
             validate_model_not_key("gemini", gem_model)
@@ -646,6 +647,47 @@ class EvidenceState:
             self.date_consistency = result
 
 
+#: Exception types an adjustment record can legitimately explain in full.
+#:
+#: The proofs below are amount-reconciliation identities, so they only mean
+#: anything for a discrepancy in an amount. ``exception_type`` used to be
+#: accepted and ignored, which let a coincidental adjustment close out an
+#: exception it had no bearing on -- most seriously MISSING_BANK_RECORD, where
+#: the money never arrived at all but a matching adjustment amount produced a
+#: confidence-1.0 AUTO_RESOLVED. A missing or duplicated record is a presence
+#: problem, not an arithmetic one, and must reach a human.
+_ADJUSTMENT_EXPLAINABLE_EXCEPTIONS = frozenset({
+    "BANK_AMOUNT_MISMATCH",
+    "GROSS_AMOUNT_MISMATCH",
+    "LEDGER_CALCULATION_ERROR",
+})
+
+#: Which reconciliation identity actually proves each exception type.
+#:
+#: Two independent identities are available as proof. The *bank* identity
+#: (``expected_net - adjustments == bank_credited``, reported by
+#: ``verify_discrepancy`` as ``BANK_ADJUSTMENT``) and the *gross* identity
+#: (``ledger_gross - adjustments == payment``, reported as ``GROSS_ADJUSTMENT``)
+#: are claims about different amounts, so the one that balanced has to be the one
+#: the exception was raised on.
+#:
+#: Accepting either for either was unsound in both directions. A
+#: GROSS_AMOUNT_MISMATCH with a 2,000 payment-vs-gross gap was auto-resolved at
+#: confidence 1.0 by a 500 adjustment purely because the bank leg happened to
+#: balance -- 1,500 left unexplained, and an audit trail quoting a bank figure the
+#: exception had nothing to do with. Symmetrically, the gross identity needs no
+#: bank record at all, so it could close a BANK_AMOUNT_MISMATCH while the bank
+#: shortfall stayed entirely unaccounted for.
+#:
+#: LEDGER_CALCULATION_ERROR is an internal gross/fee/net arithmetic fault that
+#: neither identity settles on its own, so either is accepted as corroboration.
+_MATCH_TYPES_FOR_EXCEPTION = {
+    "BANK_AMOUNT_MISMATCH": ("BANK_ADJUSTMENT",),
+    "GROSS_AMOUNT_MISMATCH": ("GROSS_ADJUSTMENT",),
+    "LEDGER_CALCULATION_ERROR": ("BANK_ADJUSTMENT", "GROSS_ADJUSTMENT"),
+}
+
+
 def has_sufficient_resolution_evidence(
     state: EvidenceState,
     exception_type: str,
@@ -653,15 +695,31 @@ def has_sufficient_resolution_evidence(
     """
     Deterministically evaluates whether the collected evidence objectively proves
     an AUTO_RESOLVED decision without needing further tool calls.
+
+    Only amount-mismatch exceptions are eligible; see
+    ``_ADJUSTMENT_EXPLAINABLE_EXCEPTIONS``. The identity that balanced must also
+    be one that bears on the exception; see ``_MATCH_TYPES_FOR_EXCEPTION``.
     """
-    # Fast path: deterministic discrepancy verification tool proves explanation
+    normalized_exception = (exception_type or "").strip().upper()
+    if normalized_exception not in _ADJUSTMENT_EXPLAINABLE_EXCEPTIONS:
+        return False, None
+
+    admissible = _MATCH_TYPES_FOR_EXCEPTION.get(normalized_exception, ())
+
+    # Fast path: deterministic discrepancy verification tool proves explanation.
     if state.discrepancy_verification and state.discrepancy_verification.get("discrepancy_fully_explained"):
-        return True, {
-            "resolution_type": "ADJUSTMENT_EXPLAINED",
-            "resolved_difference": state.discrepancy_verification.get("resolved_difference"),
-            "reason": state.discrepancy_verification.get("explanation"),
-            "calculation": state.discrepancy_verification.get("explanation"),
-        }
+        match_type = state.discrepancy_verification.get("match_type")
+        # ``verify_discrepancy`` always reports match_type. When the key is absent
+        # entirely the direction cannot be checked, so the proof is taken at face
+        # value rather than discarded -- the guard exists to reject a proof about
+        # the *wrong* figure, not to reject one that did not state its figure.
+        if match_type is None or match_type in admissible:
+            return True, {
+                "resolution_type": "ADJUSTMENT_EXPLAINED",
+                "resolved_difference": state.discrepancy_verification.get("resolved_difference"),
+                "reason": state.discrepancy_verification.get("explanation"),
+                "calculation": state.discrepancy_verification.get("explanation"),
+            }
 
     # 1. Contradictory evidence check: multiple bank records require HUMAN_REVIEW
     if state.duplicate_check and state.duplicate_check.get("is_duplicate"):
@@ -677,54 +735,78 @@ def has_sufficient_resolution_evidence(
     total_adj_amt = safe_numeric(total_adj_dec) or 0
 
     # 3. Bank Amount Mismatch / Adjusted Settlement Resolution
+    #
+    # Only for exceptions the bank identity bears on: it says the bank credit
+    # agrees with the ledger's own gross/fee less documented adjustments, which is
+    # no statement at all about a payment-vs-gross gap.
     bank_dec = None
     if state.bank_records and len(state.bank_records) == 1:
         bank_dec = safe_decimal(state.bank_records[0].get("credited_amount"))
     bank_amt = safe_numeric(bank_dec)
 
-    # If calculate_adjusted_expected_settlement was explicitly called
-    if state.adjusted_expected_settlement:
-        adj_net_dec = safe_decimal(state.adjusted_expected_settlement.get("adjusted_expected_net"))
-        if bank_dec is not None and adj_net_dec is not None and adj_net_dec == bank_dec:
-            return True, {
-                "resolution_type": "ADJUSTMENT_EXPLAINED",
-                "resolved_difference": float(total_adj_dec),
-                "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(total_adj_amt)}.",
-                "calculation": state.adjusted_expected_settlement.get("calculation", f"Adjusted settlement = {format_currency(bank_amt)}"),
-            }
+    if "BANK_ADJUSTMENT" in admissible:
+        # If calculate_adjusted_expected_settlement was explicitly called
+        if state.adjusted_expected_settlement:
+            adj_net_dec = safe_decimal(state.adjusted_expected_settlement.get("adjusted_expected_net"))
+            if bank_dec is not None and adj_net_dec is not None and adj_net_dec == bank_dec:
+                return True, {
+                    "resolution_type": "ADJUSTMENT_EXPLAINED",
+                    "resolved_difference": float(total_adj_dec),
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(total_adj_amt)}.",
+                    "calculation": state.adjusted_expected_settlement.get("calculation", f"Adjusted settlement = {format_currency(bank_amt)}"),
+                }
 
-    # If ledger and bank amounts are known
-    expected_net_dec = None
-    if state.expected_settlement:
-        expected_net_dec = safe_decimal(state.expected_settlement.get("expected_net"))
-    elif state.ledger:
-        gross_dec = safe_decimal(state.ledger.get("gross_amount"))
-        fee_dec = safe_decimal(state.ledger.get("fee")) or Decimal(0)
-        if gross_dec is not None:
-            expected_net_dec = gross_dec - fee_dec
+        # If ledger and bank amounts are known
+        expected_net_dec = None
+        if state.expected_settlement:
+            expected_net_dec = safe_decimal(state.expected_settlement.get("expected_net"))
+        elif state.ledger:
+            gross_dec = safe_decimal(state.ledger.get("gross_amount"))
+            fee_dec = safe_decimal(state.ledger.get("fee")) or Decimal(0)
+            if gross_dec is not None:
+                expected_net_dec = gross_dec - fee_dec
 
-    expected_net = safe_numeric(expected_net_dec)
-    if expected_net_dec is not None and bank_dec is not None:
-        if (expected_net_dec - total_adj_dec) == bank_dec:
-            return True, {
-                "resolution_type": "ADJUSTMENT_EXPLAINED",
-                "resolved_difference": float(total_adj_dec),
-                "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)}.",
-                "calculation": f"{format_currency(expected_net)} - {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
-            }
+        expected_net = safe_numeric(expected_net_dec)
+        if expected_net_dec is not None and bank_dec is not None:
+            if (expected_net_dec - total_adj_dec) == bank_dec:
+                return True, {
+                    "resolution_type": "ADJUSTMENT_EXPLAINED",
+                    "resolved_difference": float(total_adj_dec),
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)}.",
+                    "calculation": f"{format_currency(expected_net)} - {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
+                }
 
     # 4. Gross Amount Mismatch Resolution
+    #
+    # Gated for the mirror-image reason: this identity needs no bank record, so on
+    # its own it cannot account for a bank shortfall.
     payment_dec = safe_decimal(state.payment.get("amount")) if state.payment else None
     gross_dec = safe_decimal(state.ledger.get("gross_amount")) if state.ledger else None
     payment_amt = safe_numeric(payment_dec)
     gross_amt = safe_numeric(gross_dec)
-    if payment_dec is not None and gross_dec is not None:
-        if (payment_dec - total_adj_dec) == gross_dec or (gross_dec - total_adj_dec) == payment_dec:
+    if "GROSS_ADJUSTMENT" in admissible and payment_dec is not None and gross_dec is not None:
+        # Which identity holds matters for the audit trail: a single message was
+        # previously emitted for both directions, so half of these resolutions
+        # documented a calculation that was not the one that actually balanced.
+        if (gross_dec - total_adj_dec) == payment_dec:
+            calculation = (
+                f"Ledger Gross {format_currency(gross_amt)} - adjustment "
+                f"{format_currency(total_adj_amt)} = Payment {format_currency(payment_amt)}"
+            )
+        elif (payment_dec - total_adj_dec) == gross_dec:
+            calculation = (
+                f"Payment {format_currency(payment_amt)} - adjustment "
+                f"{format_currency(total_adj_amt)} = Ledger Gross {format_currency(gross_amt)}"
+            )
+        else:
+            calculation = None
+
+        if calculation:
             return True, {
                 "resolution_type": "ADJUSTMENT_EXPLAINED",
                 "resolved_difference": float(total_adj_dec),
                 "reason": f"Gross amount discrepancy of {format_currency(total_adj_amt)} is explicitly accounted for by adjustment reference.",
-                "calculation": f"Payment {format_currency(payment_amt)} adjusted by {format_currency(total_adj_amt)} equals Ledger Gross {format_currency(gross_amt)}",
+                "calculation": calculation,
             }
 
     return False, None
@@ -956,18 +1038,9 @@ class AgentController:
     ) -> AgentDecision:
         """Parses and validates the LLM's final JSON response into an AgentDecision."""
         try:
-            cleaned = content.strip()
-            if "```" in cleaned:
-                import re
-                match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-                if match:
-                    cleaned = match.group(1)
-            if "{" in cleaned and "}" in cleaned:
-                start = cleaned.find("{")
-                end = cleaned.rfind("}") + 1
-                cleaned = cleaned[start:end]
-
-            data = json.loads(cleaned)
+            data = repair_and_parse_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("Parsed decision content is not a dictionary")
             data.setdefault("transaction_id", txn_id)
             data.setdefault("exception_type", exception_type)
             data.setdefault("evidence", evidence or [f"Phase 1 exception: {exception_type}"])

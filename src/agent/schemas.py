@@ -92,6 +92,13 @@ class InvestigationProposal(BaseModel):
     tool_history: List[str] = Field(default_factory=list)
     reason: Optional[str] = None
     recommended_action: Optional[str] = None
+    #: Set when the proposal is a synthetic fallback produced because the provider
+    #: call itself failed, rather than a judgment the Investigator reached. The
+    #: orchestrator previously inferred this by testing whether "Provider"
+    #: appeared in ``reason``, which misfires on real findings -- "Provider fee
+    #: not recorded in ledger" is an ordinary payments reason, and paired with a
+    #: 0.0 confidence it was silently reclassified as an infrastructure failure.
+    provider_failed: bool = False
 
     @field_validator("confidence")
     @classmethod
@@ -113,6 +120,9 @@ class VerificationResult(BaseModel):
     evidence_references: List[str] = Field(default_factory=list)
     contradictions: List[str] = Field(default_factory=list)
     confidence: float = Field(..., ge=0.0, le=1.0)
+    #: Set when this result is a synthetic fallback because the provider call
+    #: failed. See InvestigationProposal.provider_failed.
+    provider_failed: bool = False
 
     @field_validator("confidence")
     @classmethod
@@ -173,6 +183,14 @@ class EvaluationMetrics(BaseModel):
     phase1_false_positives: int = 0
     phase1_false_negatives: int = 0
     phase1_labelled_records: int = 0
+
+    #: Completed Phase-2 decisions that actually carry a ground-truth label, and
+    #: therefore form the accuracy/precision denominators. Unlabelled cases used
+    #: to be scored against an assumed "HUMAN_REVIEW", which handed free credit
+    #: to every escalation and charged every auto-resolution with an error it may
+    #: not have made.
+    phase2_labelled_cases: int = 0
+    phase2_unlabelled_cases: int = 0
 
     # Raw counts
     agent_total_decisions: int

@@ -19,6 +19,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.agent.batch_controller import prefetch_case_evidence
+from src.agent.json_utils import clean_json_string, repair_and_parse_json
+from src.agent.rate_limit import LLMRateLimitError
 from src.agent.controller import (
     AgentController,
     EvidenceState,
@@ -128,15 +130,22 @@ class BatchMultiAgentController:
         proposals_map: Dict[str, Dict[str, Any]] = {}
         fallback_txns: List[str] = []
         not_evaluated_txns: List[str] = []
-        batch_max_tokens = max(600, 400 * len(batch_exceptions))
+        batch_max_tokens = max(4096, 800 * len(batch_exceptions))
+
+        # Token counters on the clients are cumulative for the whole process, so
+        # they are snapshotted here and differenced at the end. Reading them raw
+        # made every batch report the running total of all batches before it, so
+        # tokens_per_case grew with batch index and the reported cost of a run was
+        # roughly the triangular number of the true cost.
+        inv_before = self._token_snapshot(self.investigator_llm)
+        ver_before = self._token_snapshot(self.verifier_llm)
 
         inv_resp = None
         inv_content = ""
         try:
             inv_resp = self.investigator_llm.chat(messages=inv_messages, max_tokens=batch_max_tokens)
             inv_content = inv_resp.choices[0].message.content or ""
-            cleaned_inv = self._clean_json(inv_content)
-            parsed_inv = json.loads(cleaned_inv)
+            parsed_inv = repair_and_parse_json(inv_content)
 
             raw_props = parsed_inv.get("proposals") or parsed_inv.get("decisions") or []
             for p in raw_props:
@@ -146,6 +155,8 @@ class BatchMultiAgentController:
                     if "decision" in p and "proposed_resolution" not in p:
                         p["proposed_resolution"] = p["decision"]
                     proposals_map[tid] = p
+        except LLMRateLimitError:
+            raise
         except Exception as e:
             finish_reason = getattr(inv_resp.choices[0], "finish_reason", None) if inv_resp and getattr(inv_resp, "choices", None) else None
             completion_tokens = getattr(getattr(inv_resp, "usage", None), "completion_tokens", None) if inv_resp else None
@@ -160,46 +171,56 @@ class BatchMultiAgentController:
             )
 
         # Step 3: Verifier Agent Batch Execution
-        proposals_list = [
-            proposals_map.get(tid, {
-                "transaction_id": tid,
-                "proposed_resolution": "HUMAN_REVIEW",
-                "reason": "Default proposal",
-            })
-            for tid in expected_txn_ids
-        ]
-
-        ver_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": BATCH_VERIFIER_SYSTEM_PROMPT},
-            {"role": "user", "content": build_batch_verifier_prompt(prefetched_cases, proposals_list)},
-        ]
+        #
+        # Only real Investigator proposals are sent for verification. Previously a
+        # case the Investigator never produced anything for was padded with a
+        # fabricated {"proposed_resolution": "HUMAN_REVIEW", "reason": "Default
+        # proposal"} entry, which asked the Verifier to review a proposal no
+        # agent had made -- wasted tokens, and a HUMAN_REVIEW echoed back from
+        # that placeholder was indistinguishable from a real escalation. Cases
+        # without a proposal are handled by the per-case fallback in Step 4.
+        proposals_list = [proposals_map[tid] for tid in expected_txn_ids if tid in proposals_map]
 
         verifications_map: Dict[str, Dict[str, Any]] = {}
         ver_resp = None
         ver_content = ""
-        try:
-            ver_resp = self.verifier_llm.chat(messages=ver_messages, max_tokens=batch_max_tokens)
-            ver_content = ver_resp.choices[0].message.content or ""
-            cleaned_ver = self._clean_json(ver_content)
-            parsed_ver = json.loads(cleaned_ver)
 
-            raw_vers = parsed_ver.get("verifications") or parsed_ver.get("decisions") or []
-            for v in raw_vers:
-                tid = v.get("transaction_id")
-                if tid in expected_txn_ids:
-                    verifications_map[tid] = v
-        except Exception as e:
-            finish_reason = getattr(ver_resp.choices[0], "finish_reason", None) if ver_resp and getattr(ver_resp, "choices", None) else None
-            completion_tokens = getattr(getattr(ver_resp, "usage", None), "completion_tokens", None) if ver_resp else None
+        if not proposals_list:
             logger.warning(
-                "Batch %s LLM call failed, activating fallback: %s | finish_reason=%s, length=%d chars, completion_tokens=%s | Snippet: %r",
-                "verifier",
-                e,
-                finish_reason,
-                len(ver_content),
-                completion_tokens,
-                ver_content[-200:] if ver_content else "",
+                "Batch %s: Investigator produced no usable proposals; skipping the "
+                "Verifier call and routing all %d case(s) to per-case fallback.",
+                batch_id,
+                len(expected_txn_ids),
             )
+        else:
+            ver_messages: List[Dict[str, Any]] = [
+                {"role": "system", "content": BATCH_VERIFIER_SYSTEM_PROMPT},
+                {"role": "user", "content": build_batch_verifier_prompt(prefetched_cases, proposals_list)},
+            ]
+            try:
+                ver_resp = self.verifier_llm.chat(messages=ver_messages, max_tokens=batch_max_tokens)
+                ver_content = ver_resp.choices[0].message.content or ""
+                parsed_ver = repair_and_parse_json(ver_content)
+
+                raw_vers = parsed_ver.get("verifications") or parsed_ver.get("decisions") or []
+                for v in raw_vers:
+                    tid = v.get("transaction_id")
+                    if tid in expected_txn_ids:
+                        verifications_map[tid] = v
+            except LLMRateLimitError:
+                raise
+            except Exception as e:
+                finish_reason = getattr(ver_resp.choices[0], "finish_reason", None) if ver_resp and getattr(ver_resp, "choices", None) else None
+                completion_tokens = getattr(getattr(ver_resp, "usage", None), "completion_tokens", None) if ver_resp else None
+                logger.warning(
+                    "Batch %s LLM call failed, activating fallback: %s | finish_reason=%s, length=%d chars, completion_tokens=%s | Snippet: %r",
+                    "verifier",
+                    e,
+                    finish_reason,
+                    len(ver_content),
+                    completion_tokens,
+                    ver_content[-200:] if ver_content else "",
+                )
 
         # Step 4: Deterministic Proof Verification & Multi-Agent Consensus Resolution
         batch_decisions_map: Dict[str, AgentDecision] = {}
@@ -336,22 +357,22 @@ class BatchMultiAgentController:
         t_end = datetime.now(timezone.utc)
         processing_time = max(perf_end - perf_start, 0.0001)
 
-        # Token calculation from both agents
-        inv_tok_total = getattr(self.investigator_llm, "cumulative_total_tokens", 0) or 0
-        inv_tok_p = getattr(self.investigator_llm, "cumulative_prompt_tokens", 0) or 0
-        inv_tok_c = getattr(self.investigator_llm, "cumulative_completion_tokens", 0) or 0
+        # Token calculation from both agents, as deltas over this batch only.
+        inv_after = self._token_snapshot(self.investigator_llm)
+        ver_after = self._token_snapshot(self.verifier_llm)
 
-        ver_tok_total = getattr(self.verifier_llm, "cumulative_total_tokens", 0) or 0
-        ver_tok_p = getattr(self.verifier_llm, "cumulative_prompt_tokens", 0) or 0
-        ver_tok_c = getattr(self.verifier_llm, "cumulative_completion_tokens", 0) or 0
-
-        total_tok = inv_tok_total + ver_tok_total
-        total_p = inv_tok_p + ver_tok_p
-        total_c = inv_tok_c + ver_tok_c
+        total_p = (inv_after[0] - inv_before[0]) + (ver_after[0] - ver_before[0])
+        total_c = (inv_after[1] - inv_before[1]) + (ver_after[1] - ver_before[1])
+        total_tok = (inv_after[2] - inv_before[2]) + (ver_after[2] - ver_before[2])
+        total_p, total_c, total_tok = max(total_p, 0), max(total_c, 0), max(total_tok, 0)
 
         ordered_decisions = [batch_decisions_map[tid] for tid in expected_txn_ids]
 
         model_name = getattr(self.investigator_llm, "model", "demo")
+
+        # One Investigator call, plus a Verifier call only when there was
+        # something to verify, plus two calls for each per-case fallback.
+        batch_llm_interactions = 1 + (1 if proposals_list else 0) + 2 * len(fallback_txns)
 
         log = BatchInvestigationLog(
             batch_id=batch_id,
@@ -362,10 +383,10 @@ class BatchMultiAgentController:
             request_start=t_start,
             request_end=t_end,
             processing_time_sec=processing_time,
-            prompt_tokens=total_p,
-            completion_tokens=total_c,
-            total_tokens=total_tok,
-            llm_interactions=2,
+            prompt_tokens=total_p or None,
+            completion_tokens=total_c or None,
+            total_tokens=total_tok or None,
+            llm_interactions=batch_llm_interactions,
             fallback_count=len(fallback_txns),
             fallback_transaction_ids=fallback_txns,
             not_evaluated_count=len(not_evaluated_txns),
@@ -378,15 +399,19 @@ class BatchMultiAgentController:
         return ordered_decisions, log
 
     @staticmethod
+    def _token_snapshot(client: Any) -> Tuple[int, int, int]:
+        """Returns (prompt, completion, total) cumulative token counts for a client."""
+        values = []
+        for attr in (
+            "cumulative_prompt_tokens",
+            "cumulative_completion_tokens",
+            "cumulative_total_tokens",
+        ):
+            raw = getattr(client, attr, 0) or 0
+            values.append(int(raw) if isinstance(raw, (int, float)) else 0)
+        return values[0], values[1], values[2]
+
+    @staticmethod
     def _clean_json(raw_content: str) -> str:
         """Strips markdown code fences and cleans JSON output."""
-        cleaned = raw_content.strip()
-        if "```" in cleaned:
-            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-            if match:
-                cleaned = match.group(1)
-        if "{" in cleaned and "}" in cleaned:
-            start = cleaned.find("{")
-            end = cleaned.rfind("}") + 1
-            cleaned = cleaned[start:end]
-        return cleaned
+        return clean_json_string(raw_content)

@@ -48,6 +48,30 @@ from src.reconciliation import ReconciliationEngine
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
+def _fmt_pct(value: Optional[float], width: int = 0) -> str:
+    """
+    Renders a percentage that may be unmeasured.
+
+    compute_aggregate_metrics and evaluate_agent_decisions return None for any
+    rate with a zero denominator ("not measured"). Formatting that with ':.2f'
+    raises TypeError, so every accuracy readout in this script used to crash on
+    a run with no measurable denominator -- for example a subset in which the
+    agent auto-resolved nothing.
+    """
+    text = "N/A" if value is None else f"{float(value):.2f}%"
+    return f"{text:>{width}}" if width else text
+
+
+def _round_or_none(value: Optional[float], digits: int = 2) -> Optional[float]:
+    """Rounds a value, preserving None as "not measured" rather than crashing."""
+    return None if value is None else round(float(value), digits)
+
+
+def _as_ratio(percent: Optional[float]) -> Optional[float]:
+    """Converts a percentage to a 0-1 ratio, preserving None as "not measured"."""
+    return None if percent is None else float(percent) / 100.0
+
+
 def run_evaluation(
     provider: Optional[str] = None,
     cases: Optional[int] = None,
@@ -761,9 +785,9 @@ def run_evaluation(
                 "human_review": human_review,
                 "human_review_correct": eval_results.human_review_correct,
                 "ground_truth_auto_resolvable": eval_results.ground_truth_auto_resolvable,
-                "decision_accuracy": round(decision_accuracy, 2),
-                "auto_resolution_precision": round(precision, 2),
-                "auto_resolution_recall": round(recall, 2),
+                "decision_accuracy": _round_or_none(decision_accuracy),
+                "auto_resolution_precision": _round_or_none(precision),
+                "auto_resolution_recall": _round_or_none(recall),
                 "phase2_time_sec": round(phase2_time_sec, 4),
                 "total_tokens": run_total_tokens if run_total_tokens > 0 else None,
                 "investigator_calls": total_inv_calls,
@@ -826,9 +850,9 @@ def run_evaluation(
         print(f"{'Avg Latency / Case':<25} {ind_agg['average_case_latency_sec']:>10.4f}s      {batch_agg['average_case_latency_sec']:>12.4f}s       {lat_red:>7.1f}%")
         print(f"{'Total Tokens':<25} {ind_toks:>10,d}        {batch_toks:>12,d}         {tok_red:>7.1f}%")
         print(f"{'Avg Tokens / Case':<25} {ind_agg['average_tokens_per_case']:>10,d}        {batch_agg['average_tokens_per_case']:>12,d}         {tok_red:>7.1f}%")
-        print(f"{'Decision Accuracy':<25} {ind_agg['decision_accuracy']:>9.2f}%      {batch_agg['decision_accuracy']:>11.2f}%")
-        print(f"{'Auto-Res Precision':<25} {ind_agg['auto_resolution_precision']:>9.2f}%      {batch_agg['auto_resolution_precision']:>11.2f}%")
-        print(f"{'Auto-Res Recall':<25} {ind_agg['auto_resolution_recall']:>9.2f}%      {batch_agg['auto_resolution_recall']:>11.2f}%")
+        print(f"{'Decision Accuracy':<25} {_fmt_pct(ind_agg['decision_accuracy'], 10)}      {_fmt_pct(batch_agg['decision_accuracy'], 12)}")
+        print(f"{'Auto-Res Precision':<25} {_fmt_pct(ind_agg['auto_resolution_precision'], 10)}      {_fmt_pct(batch_agg['auto_resolution_precision'], 12)}")
+        print(f"{'Auto-Res Recall':<25} {_fmt_pct(ind_agg['auto_resolution_recall'], 10)}      {_fmt_pct(batch_agg['auto_resolution_recall'], 12)}")
         print("========================================\n")
 
         return {
@@ -882,9 +906,9 @@ def run_evaluation(
                 print(f"Max batch latency:         {performance_metrics['max_batch_latency_sec']:.4f} sec\n")
                 print(f"Total tokens:              {tok_str}")
                 print(f"Average tokens/case:       {agg['average_tokens_per_case']:,}\n")
-                print(f"Decision accuracy:         {agg['decision_accuracy']:.2f}%")
-                print(f"Auto-resolution precision: {agg['auto_resolution_precision']:.2f}%")
-                print(f"Auto-resolution recall:    {agg['auto_resolution_recall']:.2f}%")
+                print(f"Decision accuracy:         {_fmt_pct(agg['decision_accuracy'])}")
+                print(f"Auto-resolution precision: {_fmt_pct(agg['auto_resolution_precision'])}")
+                print(f"Auto-resolution recall:    {_fmt_pct(agg['auto_resolution_recall'])}")
                 print("========================================\n")
             else:
                 print("\n========================================")
@@ -898,9 +922,9 @@ def run_evaluation(
                 print(f"Batches processed:           {batches_done}\n")
                 print(f"Batch LLM interactions:      {batch_interactions}")
                 print(f"Individual fallbacks:        {batch_fallbacks}\n")
-                print(f"Decision accuracy:           {agg['decision_accuracy']:.2f}%")
-                print(f"Auto-resolution precision:   {agg['auto_resolution_precision']:.2f}%")
-                print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%\n")
+                print(f"Decision accuracy:           {_fmt_pct(agg['decision_accuracy'])}")
+                print(f"Auto-resolution precision:   {_fmt_pct(agg['auto_resolution_precision'])}")
+                print(f"Auto-resolution recall:      {_fmt_pct(agg['auto_resolution_recall'])}\n")
                 print(f"Processing time:             {agg['total_processing_time_sec']:.4f} sec")
                 print(f"Average case latency:        {agg['average_case_latency_sec']:.4f} sec\n")
                 print(f"Total tokens:                {tok_str}")
@@ -919,9 +943,9 @@ def run_evaluation(
             print(f"Provider: {provider_display_name}")
             print(f"Model: {client_model}\n")
             print(f"Cases evaluated:            {agg['total_completed']}")
-            print(f"Decision accuracy:           {agg['decision_accuracy']:.2f}%")
-            print(f"Auto-resolution precision:   {agg['auto_resolution_precision']:.2f}%")
-            print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%")
+            print(f"Decision accuracy:           {_fmt_pct(agg['decision_accuracy'])}")
+            print(f"Auto-resolution precision:   {_fmt_pct(agg['auto_resolution_precision'])}")
+            print(f"Auto-resolution recall:      {_fmt_pct(agg['auto_resolution_recall'])}")
             print(f"Human-review rate:           {agg['human_review_rate']:.2f}%\n")
             print("----------------------------------------")
             print("MULTI-AGENT COORDINATION & COST METRICS")
@@ -955,9 +979,9 @@ def run_evaluation(
             print(f"Auto-resolved:               {agg['auto_resolved']}")
             print(f"Human review:                {agg['human_review']}")
             print(f"Not evaluated:                {agg['total_not_evaluated']}\n")
-            print(f"Decision accuracy:           {agg['decision_accuracy']:.2f}%")
-            print(f"Auto-resolution precision:   {agg['auto_resolution_precision']:.2f}%")
-            print(f"Auto-resolution recall:      {agg['auto_resolution_recall']:.2f}%")
+            print(f"Decision accuracy:           {_fmt_pct(agg['decision_accuracy'])}")
+            print(f"Auto-resolution precision:   {_fmt_pct(agg['auto_resolution_precision'])}")
+            print(f"Auto-resolution recall:      {_fmt_pct(agg['auto_resolution_recall'])}")
             print(f"Human-review rate:           {agg['human_review_rate']:.2f}%\n")
             print(f"Total processing time:       {agg['total_processing_time_sec']:.4f} sec")
             print(f"Average case latency:        {agg['average_case_latency_sec']:.4f} sec\n")
@@ -1009,9 +1033,9 @@ def run_evaluation(
             "not_evaluated": agg["total_not_evaluated"],
             "auto_resolved": agg["auto_resolved"],
             "human_review": agg["human_review"],
-            "aggregate_accuracy": agg["decision_accuracy"] / 100.0,
-            "aggregate_precision": agg["auto_resolution_precision"] / 100.0,
-            "aggregate_recall": agg["auto_resolution_recall"] / 100.0,
+            "aggregate_accuracy": _as_ratio(agg["decision_accuracy"]),
+            "aggregate_precision": _as_ratio(agg["auto_resolution_precision"]),
+            "aggregate_recall": _as_ratio(agg["auto_resolution_recall"]),
             "human_review_rate": agg["human_review_rate"],
             "not_evaluated_rate": agg["not_evaluated_rate"],
             "total_processing_time_sec": agg["total_processing_time_sec"],
@@ -1144,7 +1168,7 @@ def main():
         
         print(f"{'Total Latency':<25} {seq_time:>10.4f}s      {p_time:>10.4f}s       {time_red:>7.1f}%")
         print(f"{'Total Tokens':<25} {seq_toks:>10,d}        {p_toks:>10,d}         {tok_red:>7.1f}%")
-        print(f"{'Decision Accuracy':<25} {seq_res['aggregate_metrics']['decision_accuracy']:>9.2f}%      {p_res['aggregate_metrics']['decision_accuracy']:>9.2f}%")
+        print(f"{'Decision Accuracy':<25} {_fmt_pct(seq_res['aggregate_metrics']['decision_accuracy'], 10)}      {_fmt_pct(p_res['aggregate_metrics']['decision_accuracy'], 10)}")
         print("========================================\n")
     else:
         run_evaluation(

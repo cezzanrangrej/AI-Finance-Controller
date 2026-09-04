@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for centralized per-role provider resolution.
 
 The defect these lock down: LLM_PROVIDER used to act as an on/off gate rather
@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.config import DEFAULT_GEMINI_MODEL
 from src.agent.provider_resolution import (
     format_resolution_banner,
     is_demo_mode_forced,
@@ -169,7 +170,9 @@ def test_provider_with_default_model_does_not_need_one_set():
         role = resolve_role("investigator")
 
     assert role.provider == "gemini"
-    assert role.model == "gemini-2.5-flash"
+    # Pinned to the single shared default rather than a literal, so the four
+    # copies of this value cannot drift apart again.
+    assert role.model == DEFAULT_GEMINI_MODEL
     assert role.degraded is False
 
 

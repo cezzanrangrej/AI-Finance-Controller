@@ -10,6 +10,10 @@ export default function AuditLogView({ activeRunId, onSelectTransaction }) {
   useEffect(() => {
     if (activeRunId) {
       loadLogs(activeRunId);
+    } else {
+      // Otherwise a previously loaded trail stays on screen after its run is no
+      // longer the active one.
+      setLogs([]);
     }
   }, [activeRunId]);
 
@@ -41,7 +45,16 @@ export default function AuditLogView({ activeRunId, onSelectTransaction }) {
         <div>
           <h2 className="text-base font-semibold text-text">Immutable Audit Trail</h2>
           <p className="text-xs text-text-secondary mt-0.5">
-            Step-by-step transaction ingestion, rule verification, and agent investigative actions for Run <span className="font-mono text-text font-medium">{activeRunId}</span>.
+            {activeRunId ? (
+              <>
+                Step-by-step transaction ingestion, rule verification, and agent investigative actions for Run{' '}
+                <span className="font-mono text-text font-medium">{activeRunId}</span>.
+              </>
+            ) : (
+              // No run is active until one completes or the user picks one in the
+              // Runs tab, so the sentence must not trail off into a blank id.
+              'No run selected. Run a reconciliation, or pick a past run in the Runs tab, to inspect its audit trail.'
+            )}
           </p>
         </div>
 

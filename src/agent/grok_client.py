@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from src.agent.rate_limit import LLMRateLimitError
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_GROK_BASE_URL = "https://api.x.ai/v1"
@@ -152,7 +154,24 @@ class GrokLLMClient:
                 with httpx.Client(timeout=REQUEST_TIMEOUT_SEC) as client:
                     resp = client.post(url, headers=headers, json=payload)
 
-                if resp.status_code == 429 or resp.status_code >= 500:
+                if resp.status_code == 429:
+                    err_text = resp.text[:300]
+                    retry_after = None
+                    ra_header = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                    if ra_header:
+                        try:
+                            retry_after = float(ra_header)
+                        except (ValueError, TypeError):
+                            pass
+                    raise LLMRateLimitError(
+                        f"Grok rate limit (429): {err_text}",
+                        retry_after=retry_after,
+                        provider="grok",
+                        status_code=429,
+                        attempt=attempt,
+                    )
+
+                if resp.status_code >= 500:
                     logger.warning(
                         f"Grok API returned HTTP {resp.status_code} (attempt {attempt}/{MAX_RETRIES}). Retrying in {delay}s..."
                     )

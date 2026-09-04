@@ -6,7 +6,7 @@ export default function RunProgressPanel({ progressState }) {
     return null;
   }
 
-  const { stage, totalRecords, phase1, phase2, error } = progressState;
+  const { stage, totalRecords, phase1, phase2, error, notEvaluated, isEmulated } = progressState;
 
   const isUploading = stage === 'UPLOADING';
   const isPhase1 = stage === 'PHASE_1';
@@ -14,14 +14,23 @@ export default function RunProgressPanel({ progressState }) {
   const isCompleted = stage === 'COMPLETED';
   const isFailed = stage === 'FAILED';
 
-  // Step 1: Ingestion
-  const step1Status = isUploading ? 'running' : 'done';
+  // A run that never got past ingestion previously still showed step 1 with a
+  // green tick, so a parse failure rendered as a successfully ingested file.
+  const step1Status = isUploading ? 'running' : isFailed && !phase1 ? 'failed' : 'done';
   // Step 2: Phase 1
   const step2Status = isPhase1 ? 'running' : phase1 || isPhase2 || isCompleted ? 'done' : 'pending';
   // Step 3: Phase 2
   const step3Status = isPhase2 ? 'running' : isCompleted ? 'done' : 'pending';
   // Step 4: Complete
   const step4Status = isCompleted ? 'done' : isFailed ? 'failed' : 'pending';
+
+  // Cases the LLM never actually judged, plus the case where the whole Phase-2
+  // step was served by the offline emulator. Surfaced next to the success state
+  // because a run can complete as a pipeline while producing no trustworthy AI
+  // verdict at all. degraded_cases is deliberately not added to notEvaluated:
+  // they count the same failures at batch and decision level, so summing them
+  // reported twice as many broken cases as there were.
+  const hasIntegrityWarning = isCompleted && ((notEvaluated || 0) > 0 || Boolean(isEmulated));
 
   const renderIcon = (status) => {
     switch (status) {
@@ -101,7 +110,9 @@ export default function RunProgressPanel({ progressState }) {
           </div>
           <p className="text-[11px] text-text-secondary mt-1 ml-6">
             {phase2
-              ? `Batch ${phase2.batchesDone}/${phase2.batchesTotal} (${phase2.resolved} res, ${phase2.humanReview} esc)`
+              ? `Batch ${phase2.batchesDone}/${phase2.batchesTotal} (${phase2.resolved} res, ${phase2.humanReview} esc${
+                  phase2.notEvaluated ? `, ${phase2.notEvaluated} n/e` : ''
+                })`
               : step3Status === 'running'
               ? 'Prefetching evidence...'
               : 'Awaiting exceptions'}
@@ -110,18 +121,31 @@ export default function RunProgressPanel({ progressState }) {
 
         {/* Step 4: Final Resolution */}
         <div className={`p-3 rounded-lg border text-xs transition-colors ${
-          step4Status === 'done'
+          hasIntegrityWarning
+            ? 'bg-amber-50 border-amber-200 text-amber-900'
+            : step4Status === 'done'
             ? 'bg-accent-green/10 border-accent-green/30 text-text'
             : step4Status === 'failed'
             ? 'bg-rose-50 border-rose-200 text-rose-800'
             : 'bg-surface-alt/50 border-border/60 text-text-secondary/60'
         }`}>
           <div className="flex items-center gap-2 font-semibold">
-            {renderIcon(step4Status)}
+            {hasIntegrityWarning ? (
+              <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+            ) : (
+              renderIcon(step4Status)
+            )}
             <span>4. Final Resolution</span>
           </div>
-          <p className="text-[11px] text-text-secondary mt-1 ml-6">
-            {isCompleted
+          <p className="text-[11px] mt-1 ml-6 text-current/80">
+            {hasIntegrityWarning
+              ? [
+                  notEvaluated ? `${notEvaluated} not evaluated` : null,
+                  isEmulated ? 'offline emulator, not a real model' : null,
+                ]
+                  .filter(Boolean)
+                  .join(', ') + ' - verify before use'
+              : isCompleted
               ? 'Saved to audit trail'
               : isFailed
               ? error || 'Pipeline failed'

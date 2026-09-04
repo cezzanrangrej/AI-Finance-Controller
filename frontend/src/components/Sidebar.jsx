@@ -46,7 +46,7 @@ export default function Sidebar({ activeTab, onSelectTab, isOpen, onToggleSideba
             </div>
             <div>
               <div className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
-                AI Finance Controller
+                ReconPilot
               </div>
               <div className="text-[10px] text-slate-400 font-normal">
                 Reconciliation Platform

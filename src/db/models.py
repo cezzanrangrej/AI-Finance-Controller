@@ -147,7 +147,20 @@ class AgentInvestigationModel(Base):
 
 
 class GroundTruthModel(Base):
-    """Ground truth repository for evaluation."""
+    """
+    Ground truth repository for evaluation. **Currently unused.**
+
+    Nothing reads or writes this table: ground truth reaches the evaluator as
+    in-memory rows, either from ``generator.generate()`` or from the uploaded
+    ``ground_truth`` CSV. The table is retained only so existing databases keep
+    their schema.
+
+    Do not wire it up as declared. ``transaction_id`` is the whole primary key,
+    with no ``run_id``, so two runs that both contain TXN001 -- the normal case,
+    since the synthetic generator reuses ids -- would collide and silently
+    overwrite each other's expected decisions. A ``run_id`` column belongs in the
+    key before this is populated.
+    """
     __tablename__ = "ground_truth"
 
     transaction_id = Column(String(50), primary_key=True, index=True)

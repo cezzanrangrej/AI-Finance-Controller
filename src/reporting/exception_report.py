@@ -260,7 +260,7 @@ def format_as_markdown(report: ExceptionReport) -> str:
     lines.append("## 4. Auto-Resolved Discrepancies (Proven by Adjustments)")
     if report.auto_resolved_cases:
         lines.append(f"Total: **{len(report.auto_resolved_cases)} cases** verified mathematically.\n")
-        lines.append("| Transaction ID | Exception Type | Resolution Type | Difference | Reason |")
+        lines.append("| Transaction ID | Exception Type |  | Difference | Reason |")
         lines.append("| :--- | :--- | :--- | :---: | :--- |")
         for c in report.auto_resolved_cases:
             diff_str = f"₹{abs(c['difference']):,.2f}" if c.get("difference") is not None else "N/A"
@@ -306,5 +306,5 @@ def format_as_markdown(report: ExceptionReport) -> str:
         lines.append("")
 
     lines.append("---")
-    lines.append("*Report generated autonomously by AI Finance Controller Audit Engine.*")
+    lines.append("*Report generated autonomously by the ReconPilot Audit Engine.*")
     return "\n".join(lines)

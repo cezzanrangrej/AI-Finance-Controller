@@ -15,9 +15,9 @@ export default function EvaluationPanel({
   const isCompleted = workflowState === 'COMPLETED';
   const isFailed = workflowState === 'FAILED';
 
-  const totalRecords = metrics?.total_records ?? 0;
-  const initialReconciled = metrics?.initial_reconciled ?? 0;
-  const initialExceptions = metrics?.initial_exceptions ?? (totalRecords >= initialReconciled ? totalRecords - initialReconciled : 0);
+  const totalRecords = streamingState?.totalRecords || metrics?.total_records || 0;
+  const initialReconciled = streamingState?.initialReconciled ?? metrics?.initial_reconciled ?? 0;
+  const initialExceptions = streamingState?.initialExceptions ?? metrics?.initial_exceptions ?? (totalRecords >= initialReconciled ? totalRecords - initialReconciled : 0);
   const aiAutoResolved = metrics?.ai_auto_resolved ?? metrics?.ai_resolved ?? 0;
   // Three buckets, not two. `not_evaluated` is cases the agent never managed to
   // judge; folding them into human_review would present a system failure as a
@@ -43,7 +43,9 @@ export default function EvaluationPanel({
   // A rate of 0 is a real measurement; only null/undefined is "not measured".
   const pct = (v) => (v != null ? `${Number(v).toFixed(1)}%` : 'N/A');
 
-  const batchList = streamingState?.batches ? Object.values(streamingState.batches) : [];
+  const batchList = streamingState?.batches
+    ? Object.values(streamingState.batches).sort((a, b) => a.batchNumber - b.batchNumber)
+    : [];
 
   return (
     <div className="bg-background border border-border rounded-lg p-6 space-y-6 shadow-xs">
@@ -199,6 +201,8 @@ export default function EvaluationPanel({
                       ? 'bg-accent-green/10 border-accent-green/30 text-text'
                       : b.status === 'RUNNING'
                       ? 'bg-accent-coral/10 border-accent-coral/30 text-text animate-pulse'
+                      : b.status === 'RETRYING'
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 animate-pulse'
                       : 'bg-background border-border text-text-secondary'
                   }`}
                 >
@@ -206,11 +210,16 @@ export default function EvaluationPanel({
                     <CheckCircle2 className="h-3.5 w-3.5 text-text flex-shrink-0" />
                   ) : b.status === 'RUNNING' ? (
                     <Loader2 className="h-3.5 w-3.5 text-accent-coral animate-spin flex-shrink-0" />
+                  ) : b.status === 'RETRYING' ? (
+                    <Loader2 className="h-3.5 w-3.5 text-amber-500 animate-spin flex-shrink-0" />
                   ) : (
                     <span className="h-2 w-2 rounded-full bg-border" />
                   )}
                   <span className="font-semibold">Batch #{b.batchNumber}</span>
                   <span className="text-[11px] text-text-secondary/60">({b.caseCount} cases)</span>
+                  {b.status === 'RETRYING' && b.retryInfo && (
+                    <span className="text-[10px] text-amber-500 font-bold">{b.retryInfo}</span>
+                  )}
                   {b.durationSec && <span className="text-[10px] text-text font-bold">{b.durationSec.toFixed(2)}s</span>}
                 </div>
               ))}
@@ -401,13 +410,10 @@ export default function EvaluationPanel({
                 </span>
               </div>
               <p className="text-[11px] text-text-secondary leading-relaxed">
-                No ground-truth file was supplied for this run, so decision accuracy,
+                No ground-truth key was configured for this run, so decision accuracy,
                 precision and recall are <strong>not measured</strong> — not 100%. The record
                 counts, resolution counts and throughput above are exact; whether those
                 resolutions were <em>correct</em> is unverified.
-              </p>
-              <p className="text-[11px] text-text-secondary/70 font-mono">
-                Upload a ground_truth.csv in Data Sources to score the next run.
               </p>
             </div>
           )}

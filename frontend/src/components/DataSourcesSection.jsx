@@ -25,7 +25,6 @@ export default function DataSourcesSection({
   const ledgerInputRef = useRef(null);
   const bankInputRef = useRef(null);
   const adjustmentsInputRef = useRef(null);
-  const groundTruthInputRef = useRef(null);
 
   const isRunning = workflowState === 'RUNNING_PHASE_1' || workflowState === 'RUNNING_AI' || workflowState === 'VALIDATING';
 
@@ -345,77 +344,6 @@ export default function DataSourcesSection({
           </div>
         </div>
 
-      </div>
-
-      {/* Ground Truth Scoring Key -- deliberately outside the source grid.
-          This is not a reconciliation input; it is the answer key the run is
-          scored against. Without it the dashboard reports N/A for accuracy
-          rather than an unverifiable number. */}
-      <div
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => handleDrop('groundTruth', e)}
-        className={`border-2 border-dashed rounded-lg p-4 transition-colors ${
-          files.groundTruth ? 'border-primary/40 bg-primary/5' : 'bg-surface border-border hover:border-text-secondary/60'
-        }`}
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs mb-1">
-              <Target className="h-3.5 w-3.5 text-primary flex-shrink-0" />
-              <span className="font-semibold text-text uppercase tracking-wide">Ground Truth (Scoring Key)</span>
-              <span className="text-[10px] font-medium text-text-secondary bg-surface-alt border border-border px-1.5 py-0.5 rounded">
-                Optional
-              </span>
-            </div>
-            <p className="text-[11px] text-text-secondary">
-              Columns: <code>transaction_id</code>, <code>expected_phase2_decision</code>, and optionally{' '}
-              <code>is_phase1_exception</code> to score Phase 1 for false positives and negatives.
-            </p>
-            <p className="text-[11px] text-text-secondary/70 mt-1">
-              {files.groundTruth
-                ? 'Accuracy, precision and recall will be measured against this file.'
-                : 'Without this file the run reports throughput and resolution counts only — accuracy shows as N/A, not 100%.'}
-            </p>
-          </div>
-
-          <div className="flex-shrink-0 w-full sm:w-56">
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              ref={groundTruthInputRef}
-              onChange={(e) => handleFileChange('groundTruth', e)}
-              className="hidden"
-            />
-
-            {files.groundTruth ? (
-              <div className="bg-background border border-primary/30 p-2.5 rounded-md text-xs space-y-1">
-                <div className="flex items-center gap-1.5 text-text font-medium truncate">
-                  <FileCheck className="h-4 w-4 flex-shrink-0 text-primary" />
-                  <span className="truncate">{files.groundTruth.name}</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-text-secondary/60">
-                  <span>{(files.groundTruth.size / 1024).toFixed(1)} KB</span>
-                  <button
-                    type="button"
-                    onClick={() => groundTruthInputRef.current?.click()}
-                    className="text-primary hover:underline font-medium cursor-pointer"
-                  >
-                    Replace
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => groundTruthInputRef.current?.click()}
-                className="w-full py-2.5 bg-background border border-border hover:bg-surface rounded-md text-xs font-medium text-text shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Upload className="h-3.5 w-3.5 text-text-secondary/60" />
-                <span>ground_truth.csv</span>
-              </button>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Dataset Validation Summary Banner */}

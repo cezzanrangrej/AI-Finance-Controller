@@ -7,12 +7,17 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from src.agent.json_utils import repair_and_parse_json
 from src.agent.controller import EvidenceState, LLMClient
 from src.agent.prompts import VERIFIER_SYSTEM_PROMPT, build_verifier_prompt
 from src.agent.schemas import InvestigationProposal, VerificationResult
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
 from src.utils.formatters import format_currency, safe_decimal, safe_numeric
+
+#: Completion budget for one Verifier turn. Was 250, which truncated the
+#: VerificationResult JSON once contradictions were populated.
+VERIFIER_MAX_TOKENS = 1200
 
 
 class VerifierAgent:
@@ -68,7 +73,7 @@ class VerifierAgent:
 
         self.last_successful_calls = 0
         try:
-            response = self.llm.chat(messages=messages, max_tokens=250)
+            response = self.llm.chat(messages=messages, max_tokens=VERIFIER_MAX_TOKENS)
             choice = response.choices[0]
             content = choice.message.content or ""
             res = self._parse_verification(content, txn_id, proposal)
@@ -87,6 +92,7 @@ class VerifierAgent:
                 evidence_references=[],
                 contradictions=[f"Verification failed due to provider error: {str(e)[:200]}"],
                 confidence=0.0,
+                provider_failed=True,
             )
 
     def _compile_deterministic_calcs(
@@ -137,17 +143,9 @@ class VerifierAgent:
     ) -> VerificationResult:
         """Parses and validates LLM response into a VerificationResult."""
         try:
-            cleaned = content.strip()
-            if "```" in cleaned:
-                match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-                if match:
-                    cleaned = match.group(1)
-            if "{" in cleaned and "}" in cleaned:
-                start = cleaned.find("{")
-                end = cleaned.rfind("}") + 1
-                cleaned = cleaned[start:end]
-
-            data = json.loads(cleaned)
+            data = repair_and_parse_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("Parsed verification content is not a dictionary")
             data.setdefault("transaction_id", txn_id)
 
             if "verified" not in data:

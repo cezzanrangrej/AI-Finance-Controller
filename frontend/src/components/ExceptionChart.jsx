@@ -3,11 +3,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 
 
 export default function ExceptionChart({ breakdown }) {
   if (!breakdown || Object.keys(breakdown).length === 0) {
-    return (
-      <div className="bg-background border border-border rounded-lg p-6 flex items-center justify-center h-64 text-text-secondary/60 text-xs shadow-xs">
-        No exception data available
-      </div>
-    );
+    return null;
   }
 
   const chartData = Object.entries(breakdown).map(([key, count]) => {
