@@ -279,6 +279,9 @@ class FinancialToolkit:
         """
         Deterministically evaluates whether documented adjustments explain amount discrepancies.
         Pre-computes exact comparison flags so the agent never performs arithmetic or comparisons.
+
+        Both adjustment directions are tested (expected settlement minus *and* plus the
+        documented adjustment); ``resolved_direction`` reports which one balanced.
         """
         payment = self._payments.get(transaction_id)
         ledger = self._ledger.get(transaction_id)
@@ -303,20 +306,51 @@ class FinancialToolkit:
         gross_explained = False
         explanation = ""
         resolved_diff = None
+        resolved_direction = None
+
+        # An adjustment record documents a magnitude, not a signed direction. A TDS
+        # deduction or chargeback lowers the settlement; a rebate credit or
+        # reimbursement raises it, and both are filed as a positive amount. Testing
+        # subtraction only left every additive adjustment looking unexplained, so
+        # both directions are evaluated and whichever lands exactly on the actual
+        # figure is the one reported. Neither matching still means unexplained.
+        bank_comparable = expected_net_dec is not None and bank_dec is not None and adj_dec > 0
+        bank_subtract = bank_comparable and (expected_net_dec - adj_dec) == bank_dec
+        bank_add = bank_comparable and (expected_net_dec + adj_dec) == bank_dec
+
+        # Same test from the gross side: payment == ledger gross -/+ adjustment.
+        gross_comparable = p_dec is not None and gross_dec is not None and adj_dec > 0
+        gross_subtract = gross_comparable and (gross_dec - adj_dec) == p_dec
+        gross_add = gross_comparable and (gross_dec + adj_dec) == p_dec
 
         if is_duplicate:
             explanation = f"Multiple ({len(bank_records)}) bank records found; requires human review."
-        elif expected_net_dec is not None and bank_dec is not None and adj_dec > 0 and (expected_net_dec - adj_dec) == bank_dec:
+        elif bank_subtract or bank_add:
             bank_explained = True
             resolved_diff = self._safe_numeric(adj_dec)
-            explanation = f"Bank credit ({self._safe_numeric(bank_dec)}) exactly matches expected settlement ({self._safe_numeric(expected_net_dec)}) minus documented adjustments ({self._safe_numeric(adj_dec)})."
-        elif p_dec is not None and gross_dec is not None and adj_dec > 0 and ((p_dec - adj_dec) == gross_dec or (gross_dec - adj_dec) == p_dec):
+            resolved_direction = "SUBTRACT" if bank_subtract else "ADD"
+            operator = "minus" if bank_subtract else "plus"
+            applied = "subtractively" if bank_subtract else "additively"
+            explanation = (
+                f"Bank credit ({self._safe_numeric(bank_dec)}) exactly matches expected settlement "
+                f"({self._safe_numeric(expected_net_dec)}) {operator} documented adjustments "
+                f"({self._safe_numeric(adj_dec)}); the adjustment was applied {applied}."
+            )
+        elif gross_subtract or gross_add:
             gross_explained = True
             resolved_diff = self._safe_numeric(adj_dec)
-            explanation = f"Gross discrepancy between payment ({self._safe_numeric(p_dec)}) and ledger ({self._safe_numeric(gross_dec)}) is exactly explained by adjustment of {self._safe_numeric(adj_dec)}."
+            resolved_direction = "SUBTRACT" if gross_subtract else "ADD"
+            operator = "-" if gross_subtract else "+"
+            applied = "subtractively" if gross_subtract else "additively"
+            explanation = (
+                f"Gross discrepancy between payment ({self._safe_numeric(p_dec)}) and ledger "
+                f"({self._safe_numeric(gross_dec)}) is exactly explained by adjustment of "
+                f"{self._safe_numeric(adj_dec)} applied {applied} "
+                f"(ledger gross {operator} adjustment = payment)."
+            )
         elif expected_net_dec is not None and bank_dec is not None:
             diff = self._safe_numeric(expected_net_dec - bank_dec)
-            explanation = f"Bank discrepancy of {diff} is not explained by documented adjustments (total: {self._safe_numeric(adj_dec)})."
+            explanation = f"Bank discrepancy of {diff} is not explained by documented adjustments in either direction (total: {self._safe_numeric(adj_dec)})."
         else:
             explanation = "Insufficient records to establish discrepancy explanation."
 
@@ -327,6 +361,7 @@ class FinancialToolkit:
             "discrepancy_fully_explained": bank_explained or gross_explained,
             "match_type": "BANK_ADJUSTMENT" if bank_explained else ("GROSS_ADJUSTMENT" if gross_explained else "NONE"),
             "resolved_difference": resolved_diff,
+            "resolved_direction": resolved_direction,
             "is_duplicate_bank": is_duplicate,
             "bank_records_count": len(bank_records),
             "total_adjustments": self._safe_numeric(adj_dec),

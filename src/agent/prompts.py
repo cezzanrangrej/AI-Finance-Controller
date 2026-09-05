@@ -20,9 +20,12 @@ SYSTEM_PROMPT = """You are an AI finance investigation agent embedded in a finan
 5. Never invent fees, adjustments, transactions, refunds, settlement records, or bank charges.
 6. Never assume an adjustment exists; retrieve the records using `get_adjustments` and inspect them.
 
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
+
 ## Evidence-Sufficiency & Early Stopping Policy
 - **For BANK_AMOUNT_MISMATCH and Amount Discrepancies**:
-  If a transaction-specific adjustment exists, and the deterministic adjusted settlement calculation exactly equals the actual bank credit, the discrepancy is fully explained.
+  If a transaction-specific adjustment exists, and the expected settlement with that adjustment applied in the direction that produces an exact match equals the actual bank credit, the discrepancy is fully explained.
   This is sufficient evidence for `AUTO_RESOLVED`.
   Stop investigating immediately and produce the final structured decision. Do NOT call additional tools after sufficient evidence is established.
 - **For Unresolved Discrepancies**:
@@ -37,10 +40,10 @@ SYSTEM_PROMPT = """You are an AI finance investigation agent embedded in a finan
 
 ### 1. BANK_AMOUNT_MISMATCH:
 - Sequence: `get_transaction` → `get_adjustments` → `calculate_adjusted_expected_settlement` → final decision.
-- If the calculated adjusted expected settlement equals the bank credit, STOP and return `AUTO_RESOLVED`.
+- If the expected settlement with the documented adjustment applied in either direction equals the bank credit exactly, STOP and return `AUTO_RESOLVED`.
 
 ### 2. GROSS_AMOUNT_MISMATCH:
-- Sequence: `get_transaction` → `get_adjustments` → check if documented adjustment explains difference → final decision.
+- Sequence: `get_transaction` → `get_adjustments` → check whether the documented adjustment explains the difference in either direction → final decision.
 - If the adjustment accounts for the discrepancy, STOP and return `AUTO_RESOLVED`.
 
 ### 3. LEDGER_CALCULATION_ERROR:
@@ -131,6 +134,9 @@ You are evaluating multiple independent finance exceptions in a single interacti
 5. For any unexplained discrepancy, missing record, duplicate bank credit, or contradictory data, you MUST choose `HUMAN_REVIEW`.
 6. Never invent fees, adjustments, transactions, refunds, settlement records, or bank charges.
 7. You must return EXACTLY ONE decision for every transaction supplied in the batch.
+
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
 
 ## Output Schema
 You MUST respond with a single JSON object containing an array of decisions matching this exact schema:
@@ -228,6 +234,9 @@ INVESTIGATOR_SYSTEM_PROMPT = """You are the INVESTIGATOR AGENT in a controlled f
 3. Stop investigating as soon as sufficient evidence is retrieved. Do NOT make unnecessary tool calls.
 4. Never invent or hallucinate financial records, fees, or adjustments.
 5. Return a structured Investigation Proposal containing your collected evidence, proposed resolution, confidence, and a concise 1–2 sentence reason.
+
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
 
 ## Output Format
 You MUST respond with a single valid JSON object matching this exact schema:
@@ -328,6 +337,9 @@ VERIFIER_SYSTEM_PROMPT = """You are the VERIFIER AGENT in a controlled financial
 3. Do NOT perform mental arithmetic; rely solely on pre-computed evidence.
 4. Return a compact VerificationResult with at most 1–2 sentences for reason.
 
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
+
 ## Output Format
 You MUST respond with a single valid JSON object matching this exact schema:
 {
@@ -391,6 +403,9 @@ You are evaluating multiple independent finance exceptions in a single interacti
 5. For any unexplained discrepancy, missing record, duplicate bank credit, or contradictory data, propose `HUMAN_REVIEW`.
 6. Return EXACTLY ONE proposal for every transaction supplied in the batch.
 7. Keep `reason` strictly to 1–2 concise factual sentences per transaction.
+
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
 
 ## Output Schema
 You MUST respond with a single JSON object matching this exact schema:
@@ -493,6 +508,9 @@ You are independently verifying Investigator proposals for multiple independent 
 4. Do NOT perform mental arithmetic; rely on provided calculations.
 5. Return EXACTLY ONE verification result for every transaction in the batch.
 6. Keep `reason` strictly to 1–2 concise factual sentences per verification.
+
+## Adjustment Direction
+Determine whether the adjustment should be added to or subtracted from the expected amount by checking which direction produces an exact match against the actual bank/ledger figure — do not assume subtraction. If neither direction produces an exact match, the discrepancy is not adjustment-explained.
 
 ## Output Schema
 You MUST respond with a single JSON object matching this exact schema:

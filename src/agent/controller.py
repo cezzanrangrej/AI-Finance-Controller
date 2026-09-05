@@ -645,11 +645,12 @@ _ADJUSTMENT_EXPLAINABLE_EXCEPTIONS = frozenset({
 #: Which reconciliation identity actually proves each exception type.
 #:
 #: Two independent identities are available as proof. The *bank* identity
-#: (``expected_net - adjustments == bank_credited``, reported by
+#: (``expected_net -/+ adjustments == bank_credited``, reported by
 #: ``verify_discrepancy`` as ``BANK_ADJUSTMENT``) and the *gross* identity
-#: (``ledger_gross - adjustments == payment``, reported as ``GROSS_ADJUSTMENT``)
+#: (``ledger_gross -/+ adjustments == payment``, reported as ``GROSS_ADJUSTMENT``)
 #: are claims about different amounts, so the one that balanced has to be the one
-#: the exception was raised on.
+#: the exception was raised on. Each is tested in both directions, since an
+#: adjustment record states a magnitude and not a sign.
 #:
 #: Accepting either for either was unsound in both directions. A
 #: GROSS_AMOUNT_MISMATCH with a 2,000 payment-vs-gross gap was auto-resolved at
@@ -725,15 +726,38 @@ def has_sufficient_resolution_evidence(
     bank_amt = safe_numeric(bank_dec)
 
     if "BANK_ADJUSTMENT" in admissible:
+        # An adjustment amount is a magnitude, not a signed direction: a TDS
+        # deduction lowers the settlement, a rebate credit raises it, and both are
+        # filed as a positive amount. Each identity below is therefore tested in
+        # both directions, and the direction that lands exactly on the bank figure
+        # is the one recorded in the audit trail. Neither matching is still an
+        # unexplained discrepancy.
+
         # If calculate_adjusted_expected_settlement was explicitly called
         if state.adjusted_expected_settlement:
             adj_net_dec = safe_decimal(state.adjusted_expected_settlement.get("adjusted_expected_net"))
+            base_net_dec = safe_decimal(state.adjusted_expected_settlement.get("base_expected_net"))
+            tool_adj_dec = safe_decimal(state.adjusted_expected_settlement.get("total_adjustments"))
+            # The tool subtracts, so the additive candidate is rebuilt from the
+            # unadjusted base it also reports.
+            additive_net_dec = (
+                base_net_dec + tool_adj_dec
+                if base_net_dec is not None and tool_adj_dec is not None
+                else None
+            )
             if bank_dec is not None and adj_net_dec is not None and adj_net_dec == bank_dec:
                 return True, {
                     "resolution_type": "ADJUSTMENT_EXPLAINED",
                     "resolved_difference": float(total_adj_dec),
-                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(total_adj_amt)}.",
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement minus documented adjustment of {format_currency(total_adj_amt)} (adjustment applied subtractively).",
                     "calculation": state.adjusted_expected_settlement.get("calculation", f"Adjusted settlement = {format_currency(bank_amt)}"),
+                }
+            if bank_dec is not None and additive_net_dec is not None and additive_net_dec == bank_dec:
+                return True, {
+                    "resolution_type": "ADJUSTMENT_EXPLAINED",
+                    "resolved_difference": float(total_adj_dec),
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement plus documented adjustment of {format_currency(total_adj_amt)} (adjustment applied additively; the subtractive direction does not match).",
+                    "calculation": f"{format_currency(safe_numeric(base_net_dec))} + {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
                 }
 
         # If ledger and bank amounts are known
@@ -752,8 +776,15 @@ def has_sufficient_resolution_evidence(
                 return True, {
                     "resolution_type": "ADJUSTMENT_EXPLAINED",
                     "resolved_difference": float(total_adj_dec),
-                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)}.",
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) minus documented adjustment of {format_currency(total_adj_amt)} (adjustment applied subtractively).",
                     "calculation": f"{format_currency(expected_net)} - {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
+                }
+            if (expected_net_dec + total_adj_dec) == bank_dec:
+                return True, {
+                    "resolution_type": "ADJUSTMENT_EXPLAINED",
+                    "resolved_difference": float(total_adj_dec),
+                    "reason": f"Bank credit ({format_currency(bank_amt)}) equals expected settlement ({format_currency(expected_net)}) plus documented adjustment of {format_currency(total_adj_amt)} (adjustment applied additively; the subtractive direction does not match).",
+                    "calculation": f"{format_currency(expected_net)} + {format_currency(total_adj_amt)} = {format_currency(bank_amt)}",
                 }
 
     # 4. Gross Amount Mismatch Resolution
@@ -765,27 +796,30 @@ def has_sufficient_resolution_evidence(
     payment_amt = safe_numeric(payment_dec)
     gross_amt = safe_numeric(gross_dec)
     if "GROSS_ADJUSTMENT" in admissible and payment_dec is not None and gross_dec is not None:
-        # Which identity holds matters for the audit trail: a single message was
-        # previously emitted for both directions, so half of these resolutions
-        # documented a calculation that was not the one that actually balanced.
+        # Which direction holds matters for the audit trail: a single message was
+        # previously emitted for both, so half of these resolutions documented a
+        # calculation that was not the one that actually balanced.
         if (gross_dec - total_adj_dec) == payment_dec:
+            direction = "subtractively"
             calculation = (
                 f"Ledger Gross {format_currency(gross_amt)} - adjustment "
                 f"{format_currency(total_adj_amt)} = Payment {format_currency(payment_amt)}"
             )
-        elif (payment_dec - total_adj_dec) == gross_dec:
+        elif (gross_dec + total_adj_dec) == payment_dec:
+            direction = "additively"
             calculation = (
-                f"Payment {format_currency(payment_amt)} - adjustment "
-                f"{format_currency(total_adj_amt)} = Ledger Gross {format_currency(gross_amt)}"
+                f"Ledger Gross {format_currency(gross_amt)} + adjustment "
+                f"{format_currency(total_adj_amt)} = Payment {format_currency(payment_amt)}"
             )
         else:
+            direction = None
             calculation = None
 
         if calculation:
             return True, {
                 "resolution_type": "ADJUSTMENT_EXPLAINED",
                 "resolved_difference": float(total_adj_dec),
-                "reason": f"Gross amount discrepancy of {format_currency(total_adj_amt)} is explicitly accounted for by adjustment reference.",
+                "reason": f"Gross amount discrepancy of {format_currency(total_adj_amt)} is explicitly accounted for by adjustment reference (adjustment applied {direction}).",
                 "calculation": calculation,
             }
 
