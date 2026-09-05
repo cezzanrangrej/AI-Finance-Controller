@@ -1,0 +1,5 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST5_008,SETTLEMENT_ADJUSTMENT,35.50,Documented settlement deduction,2026-07-22,ADJ5-0008
+TEST5_023,SETTLEMENT_ADJUSTMENT,75.25,Documented settlement deduction,2026-07-13,ADJ5-0023
+TEST5_047,SETTLEMENT_ADJUSTMENT,120.00,Documented settlement deduction,2026-08-02,ADJ5-0047
+TEST5_082,SETTLEMENT_ADJUSTMENT,18.75,Documented settlement deduction,2026-07-28,ADJ5-0082

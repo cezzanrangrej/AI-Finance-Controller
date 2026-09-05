@@ -1,0 +1,6 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST6_006,SETTLEMENT_ADJUSTMENT,35.5,Documented settlement deduction,26-08-2026,ADJ6-0006
+TEST6_024,SETTLEMENT_ADJUSTMENT,75.25,Documented settlement deduction,07-09-2026,ADJ6-0024
+TEST6_041,SETTLEMENT_ADJUSTMENT,120,Documented settlement deduction,14-09-2026,ADJ6-0041
+TEST6_067,SETTLEMENT_ADJUSTMENT,18.75,Documented settlement deduction,28-08-2026,ADJ6-0067
+TEST6_091,SETTLEMENT_ADJUSTMENT,52.5,Documented settlement deduction,01-08-2026,ADJ6-0091

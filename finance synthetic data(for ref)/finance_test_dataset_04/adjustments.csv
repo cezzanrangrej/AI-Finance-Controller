@@ -1,0 +1,6 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST4_009,GROSS_INVOICE_ADJUSTMENT,500,Approved merchant invoice reduction,2026-09-09,T4ADJ_009
+TEST4_010,SETTLEMENT_ADJUSTMENT,250,Contracted settlement deduction,2026-09-10,T4ADJ_010
+TEST4_011,BANK_PROCESSING_FEE,400,Documented bank processing charge,2026-09-11,T4ADJ_011
+TEST4_012,GROSS_INVOICE_ADJUSTMENT,300,Approved customer credit adjustment,2026-09-12,T4ADJ_012
+TEST4_013,SETTLEMENT_ADJUSTMENT,600,Documented settlement reserve,2026-09-13,T4ADJ_013

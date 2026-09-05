@@ -1,0 +1,8 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST2_005,GROSS_INVOICE_ADJUSTMENT,100,Test dataset 2 documented gross invoice adjustment,2026-09-05,T2ADJ_005
+TEST2_012,GROSS_INVOICE_ADJUSTMENT,200,Test dataset 2 documented gross invoice adjustment,2026-09-12,T2ADJ_012
+TEST2_028,GROSS_INVOICE_ADJUSTMENT,100,Test dataset 2 documented gross invoice adjustment,2026-09-28,T2ADJ_028
+TEST2_041,GROSS_INVOICE_ADJUSTMENT,1000,Test dataset 2 documented gross invoice adjustment,2026-09-11,T2ADJ_041
+TEST2_009,BANK_PROCESSING_FEE,50,Test dataset 2 documented settlement adjustment,2026-09-09,T2ADJ_009
+TEST2_018,SETTLEMENT_ADJUSTMENT,500,Test dataset 2 documented settlement adjustment,2026-09-18,T2ADJ_018
+TEST2_033,SETTLEMENT_ADJUSTMENT,250,Test dataset 2 documented settlement adjustment,2026-09-03,T2ADJ_033

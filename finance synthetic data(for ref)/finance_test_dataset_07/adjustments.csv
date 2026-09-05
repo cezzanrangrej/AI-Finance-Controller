@@ -1,0 +1,4 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST7_007,SETTLEMENT_ADJUSTMENT,35.50,Documented settlement deduction,2026-09-03,ADJ7-0007
+TEST7_031,SETTLEMENT_ADJUSTMENT,75.25,Documented settlement deduction,2026-09-25,ADJ7-0031
+TEST7_084,SETTLEMENT_ADJUSTMENT,120.00,Documented settlement deduction,2026-08-12,ADJ7-0084

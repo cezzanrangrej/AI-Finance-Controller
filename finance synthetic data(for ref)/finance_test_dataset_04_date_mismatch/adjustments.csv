@@ -1,0 +1,7 @@
+transaction_id,adjustment_type,amount,reason,date,reference
+TEST3_004,SETTLEMENT_ADJUSTMENT,100,Documented adjustment for Test Dataset 03,04-10-2026,T3ADJ_004
+TEST3_011,BANK_PROCESSING_FEE,250,Documented adjustment for Test Dataset 03,11-10-2026,T3ADJ_011
+TEST3_019,SETTLEMENT_ADJUSTMENT,100,Documented adjustment for Test Dataset 03,19-10-2026,T3ADJ_019
+TEST3_027,GROSS_INVOICE_ADJUSTMENT,500,Documented adjustment for Test Dataset 03,27-10-2026,T3ADJ_027
+TEST3_042,GROSS_INVOICE_ADJUSTMENT,500,Documented adjustment for Test Dataset 03,11-10-2026,T3ADJ_042
+TEST3_058,SETTLEMENT_ADJUSTMENT,100,Documented adjustment for Test Dataset 03,27-10-2026,T3ADJ_058
