@@ -154,7 +154,7 @@ export default function App() {
 
               {/* 2. REAL-TIME RECONCILIATION PROGRESS PANEL
                   Renders nothing until a run starts. */}
-              <RunProgressPanel progressState={progressState} />
+              <RunProgressPanel progressState={progressState} metrics={metrics} />
 
               {/* Everything below reports on a run. Until one has produced
                   results in this session there is nothing to report, so the
@@ -230,7 +230,7 @@ export default function App() {
                 onRunReconciliation={handleRunReconciliation}
                 workflowState={workflowState}
               />
-              <RunProgressPanel progressState={progressState} />
+              <RunProgressPanel progressState={progressState} metrics={metrics} />
             </>
           )}
 

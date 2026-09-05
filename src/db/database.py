@@ -57,6 +57,7 @@ _ADDITIVE_COLUMNS = (
     ("transaction_results", "source_provenance_json", "TEXT"),
     ("runs", "llm_degraded", "BOOLEAN NOT NULL DEFAULT 0"),
     ("runs", "llm_degraded_reason", "VARCHAR(500)"),
+    ("runs", "pre_resolved_count", "INTEGER DEFAULT 0"),
 )
 
 

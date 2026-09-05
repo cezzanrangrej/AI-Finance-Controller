@@ -1,20 +1,20 @@
 """
 Multi-Agent Orchestrator — coordinates exception routing, Investigator Agent,
-Verifier Agent, deterministic arithmetic verification, and final safety policy execution.
+Verifier Agent, and final safety policy execution.
+
+Arithmetic proof is applied upstream, not here. `src.agent.pre_filter` resolves
+every exception a documented adjustment already explains before any agent is
+invoked, so this orchestrator only ever sees cases arithmetic could not settle.
+Its job is consensus between the two agents and conservative escalation when
+they disagree.
 """
 
 import logging
-import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
-from src.agent.controller import (
-    EvidenceState,
-    LLMClient,
-    build_proven_adjustment_resolution,
-    has_sufficient_resolution_evidence,
-)
+from src.agent.controller import LLMClient
 from src.agent.provider_resolution import (
     ProviderResolution,
     build_role_clients,
@@ -26,9 +26,6 @@ from src.agent.multi_agent.verifier import VerifierAgent
 from src.agent.schemas import (
     AgentDecision,
     InvestigationLog,
-    InvestigationProposal,
-    ToolCallTrace,
-    VerificationResult,
 )
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
@@ -39,7 +36,7 @@ logger = logging.getLogger(__name__)
 class MultiAgentOrchestrator:
     """
     Coordinates multi-agent investigation workflow without performing authoritative mental arithmetic.
-    Applies strict disagreement handling, deterministic proof enforcement, and safety policies.
+    Applies strict disagreement handling and conservative safety policies.
     """
 
     def __init__(
@@ -216,12 +213,7 @@ class MultiAgentOrchestrator:
             return decision, log
 
         # -------------------------------------------------------------
-        # Step 2: Deterministic Proof Check (Python/Decimal is Authoritative)
-        # -------------------------------------------------------------
-        is_proven, proof_data = has_sufficient_resolution_evidence(evidence_state, exception_type)
-
-        # -------------------------------------------------------------
-        # Step 3: Verifier Agent independently verifies proposal
+        # Step 2: Verifier Agent independently verifies proposal
         # -------------------------------------------------------------
         self.tracer.orchestrator_routing("Verifier")
         verification = self.verifier.verify(
@@ -233,24 +225,21 @@ class MultiAgentOrchestrator:
         self.tracer.orchestrator_step_completed("Verifier")
         verifier_calls = getattr(self.verifier, "last_successful_calls", 0)
 
-        # Check for provider failure on verifier (explicit flag, not substring)
+        # Check for provider failure on verifier (explicit flag, not substring).
+        # There is no arithmetic proof left to fall back on -- the pre-filter
+        # already claimed every provable case -- so an unreachable Verifier means
+        # the case genuinely was not assessed.
         if getattr(verification, "provider_failed", False):
-            if is_proven and proof_data:
-                # Deterministic proof overrides verifier technical error safely
-                decision = build_proven_adjustment_resolution(txn_id, exception_type, evidence, proof_data)
-                res_source = "DETERMINISTIC_EVIDENCE"
-            else:
-                decision = AgentDecision(
-                    transaction_id=txn_id,
-                    decision="NOT_EVALUATED",
-                    exception_type=exception_type,
-                    resolution_type="NONE",
-                    reason=verification.reason,
-                    evidence=evidence or [f"Phase 1 exception: {exception_type}"],
-                    confidence=0.0,
-                    recommended_action="Manual review required due to verifier API failure.",
-                )
-                res_source = "PROVIDER_ERROR"
+            decision = AgentDecision(
+                transaction_id=txn_id,
+                decision="NOT_EVALUATED",
+                exception_type=exception_type,
+                resolution_type="NONE",
+                reason=verification.reason,
+                evidence=evidence or [f"Phase 1 exception: {exception_type}"],
+                confidence=0.0,
+                recommended_action="Manual review required due to verifier API failure.",
+            )
 
             log = InvestigationLog(
                 transaction_id=txn_id,
@@ -266,7 +255,7 @@ class MultiAgentOrchestrator:
                 tool_call_count=tool_calls_count,
                 tool_traces=tool_traces,
                 agent_mode="MULTI_AGENT",
-                resolution_source=res_source,
+                resolution_source="PROVIDER_ERROR",
                 investigator_proposal=proposal.model_dump(),
                 verification_result=verification.model_dump(),
                 investigator_calls=investigator_calls,
@@ -276,7 +265,7 @@ class MultiAgentOrchestrator:
             return decision, log
 
         # -------------------------------------------------------------
-        # Step 4: Disagreement Policy & Final Controller Decision
+        # Step 3: Disagreement Policy & Final Controller Decision
         # -------------------------------------------------------------
         self.tracer.orchestrator_policy_start()
         inv_dec = proposal.proposed_resolution
@@ -291,17 +280,7 @@ class MultiAgentOrchestrator:
         final_action: str
         final_confidence: float
 
-        # Deterministic proof is supreme for AUTO_RESOLVED
-        if is_proven and proof_data:
-            final_decision_str = "AUTO_RESOLVED"
-            resolution_type = proof_data.get("resolution_type", "ADJUSTMENT_EXPLAINED")
-            resolved_difference = proof_data.get("resolved_difference")
-            resolution_source = "DETERMINISTIC_EVIDENCE"
-            final_reason = proof_data.get("reason", proposal.reason or "Documented adjustments explain difference.")
-            final_action = "No action needed; discrepancy fully accounted for by adjustment record."
-            final_confidence = 1.0
-
-        elif inv_dec == "AUTO_RESOLVED" and ver_dec == "AUTO_RESOLVED":
+        if inv_dec == "AUTO_RESOLVED" and ver_dec == "AUTO_RESOLVED":
             # Both agree on AUTO_RESOLVED
             final_decision_str = "AUTO_RESOLVED"
             resolution_type = proposal.resolution_type or "ADJUSTMENT_EXPLAINED"
@@ -342,7 +321,9 @@ class MultiAgentOrchestrator:
         self.tracer.final_decision(
             investigator_dec=inv_dec,
             verifier_dec=ver_dec,
-            proof_pass=bool(is_proven),
+            # Cases reaching the agents are pre-filtered as arithmetically
+            # unprovable, so the proof column is always a miss here.
+            proof_pass=False,
             final_decision=final_decision_str,
             resolution_type=resolution_type,
             resolution_source=resolution_source,

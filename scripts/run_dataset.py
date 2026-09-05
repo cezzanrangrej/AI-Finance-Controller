@@ -41,6 +41,11 @@ from src.agent.tools import FinancialToolkit
 from src.agent.controller import AgentController, LLMClient
 from src.agent.batch_controller import BatchAgentController
 from src.agent.evaluator import partition_evaluation_runs
+from src.agent.pre_filter import (
+    prefilter_proven_exceptions,
+    print_pre_filter_header,
+    print_pre_filter_summary,
+)
 from src.agent.schemas import AgentDecision
 from src.agent.trace import AgentTracer, parse_bool_env
 
@@ -175,8 +180,8 @@ def print_phase1_report(
     print(f"Exceptions:        {exceptions}")
     print(f"Match rate:        {match_rate:.2f}%\n")
     print("----------------------------------------")
-    print("EXCEPTION BREAKDOWN")
-    print("----------------------------------------\n")
+    print("PHASE 1 EXCEPTION BREAKDOWN")
+    print("----------------------------------------")
 
     printed = set()
     for exc_type in EXCEPTION_BREAKDOWN_ORDER:
@@ -188,7 +193,9 @@ def print_phase1_report(
         if exc_type not in printed:
             print(f"  {exc_type:<30} {count}")
 
-    print("\n========================================\n")
+    # No trailing blank line: print_pre_filter_header() opens with one, so the
+    # CLI keeps the same single-gap spacing as the API terminal output.
+    print("========================================")
 
 
 # ---------------------------------------------------------------------------
@@ -261,19 +268,36 @@ def run_llm_mode(
     llm_client = _build_llm_client(provider, api_key, model)
     toolkit = FinancialToolkit(payments, ledger_rows, bank_rows, adjustments)
 
-    print(f"\n--- Investigating {len(selected)} exception(s) [Mode: {mode.upper()}] ---\n")
-
-    decisions: List[AgentDecision] = []
     t_start = time.time()
 
-    if mode in ("batch", "multi-agent"):
+    # Deterministic proof runs before any batch is formed and before any model is
+    # called: an exception a documented adjustment already explains
+    # arithmetically is closed here, in Python, at zero token cost. Only the
+    # remainder is forwarded to the agents, which is why the controllers no
+    # longer re-check the proof afterwards.
+    print_pre_filter_header()
+    pre_filter = prefilter_proven_exceptions(selected, toolkit)
+    ambiguous = pre_filter.ambiguous_exceptions
+    print_pre_filter_summary(pre_filter)
+
+    decisions: List[AgentDecision] = list(pre_filter.proven_decisions)
+
+    if not ambiguous:
+        print(
+            f"--- All {pre_filter.pre_resolved_count} exception(s) closed by deterministic "
+            f"proof — no LLM invocation required [Mode: {mode.upper()}] ---\n"
+        )
+    else:
+        print(f"--- Investigating {len(ambiguous)} exception(s) [Mode: {mode.upper()}] ---\n")
+
+    if ambiguous and mode in ("batch", "multi-agent"):
         from src.agent.batch_partitioner import partition_exceptions_balanced
         from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
 
         batch_agent = BatchMultiAgentController(
             toolkit=toolkit, provider=provider, api_key=api_key, tracer=tracer
         )
-        chunks = partition_exceptions_balanced(selected, batch_size=batch_size)
+        chunks = partition_exceptions_balanced(ambiguous, batch_size=batch_size)
         total_batches = len(chunks)
         concurrency_limit = src.config.get_max_parallel_batches()
         if parallel_batches is not None:
@@ -281,10 +305,14 @@ def run_llm_mode(
         else:
             actual_parallel_batches = min(total_batches, concurrency_limit)
 
-        print("\n========================================")
+        # The "--- Investigating N ---" line above already ends with a blank line,
+        # so this header opens flush against it (one gap, as in the API terminal).
+        print("========================================")
         print("BALANCED PARALLEL MULTI-AGENT BATCH PLAN")
         print("========================================\n")
-        print(f"Cases selected:          {len(selected)}")
+        print(f"Cases selected:           {len(selected)}")
+        print(f"Pre-resolved (proof):     {pre_filter.pre_resolved_count}")
+        print(f"Cases sent to AI:         {len(ambiguous)}")
         print(f"Batch size:               {batch_size}")
         print(f"Total batches:            {total_batches}")
         print(f"Concurrency limit:        {concurrency_limit}")
@@ -317,7 +345,7 @@ def run_llm_mode(
                     run_id=f"run_ds_{uuid.uuid4().hex[:8]}",
                     run_num=1,
                     total_runs=1,
-                    cases_per_run=len(selected),
+                    cases_per_run=len(ambiguous),
                     batch_size=batch_size,
                     selected_provider=provider,
                     client_model=model or getattr(llm_client, "model", "demo"),
@@ -327,7 +355,7 @@ def run_llm_mode(
                     tracer=tracer,
                 )
             )
-            decisions = parallel_res.decisions
+            decisions.extend(parallel_res.decisions)
         else:
             for b_idx, chunk in enumerate(chunks, 1):
                 chunk_tids = [c.get("transaction_id", "?") for c in chunk]
@@ -342,12 +370,12 @@ def run_llm_mode(
                     )
                     print(f"    -> {d.transaction_id}: {tag}")
 
-    elif mode == "individual":
+    elif ambiguous and mode == "individual":
         agent = AgentController(toolkit=toolkit, llm_client=llm_client, tracer=tracer)
-        for idx, exc in enumerate(selected, 1):
+        for idx, exc in enumerate(ambiguous, 1):
             txn_id = exc.get("transaction_id", "UNKNOWN")
             reason = exc.get("reason", "UNKNOWN")
-            print(f"  [{idx}/{len(selected)}] Investigating {txn_id} ({reason}) [Individual]...")
+            print(f"  [{idx}/{len(ambiguous)}] Investigating {txn_id} ({reason}) [Individual]...")
             decision, _log = agent.investigate_exception(exc)
             decisions.append(decision)
             tag = (
@@ -431,6 +459,8 @@ def run_llm_mode(
         print("EVALUATION SUMMARY")
         print("========================================\n")
         print(f"Cases evaluated:          {evaluated_count}")
+        print(f"  via Decimal proof:      {pre_filter.pre_resolved_count} (0 LLM tokens)")
+        print(f"  via AI multi-agent:     {len(ambiguous)}")
         print(f"Correct:                  {correct_count}")
         print(f"Incorrect:                {incorrect_count}")
         print(f"Decision accuracy:        {fmt(accuracy)}\n")
@@ -453,6 +483,8 @@ def run_llm_mode(
         print("========================================\n")
         print(f"Mode:              {mode.upper()}")
         print(f"Cases investigated: {len(decisions)}")
+        print(f"  Pre-resolved (proof): {pre_filter.pre_resolved_count} (0 LLM tokens)")
+        print(f"  Sent to AI:           {len(ambiguous)}")
         print(f"Auto-resolved:     {auto_resolved}")
         print(f"Human review:      {human_review}")
         print(f"Not evaluated:     {not_eval}")

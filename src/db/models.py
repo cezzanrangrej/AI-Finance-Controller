@@ -53,6 +53,7 @@ class RunModel(Base):
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
     total_tokens = Column(Integer, nullable=True)
+    pre_resolved_count = Column(Integer, nullable=True, default=0)
     llm_cases_selected = Column(Integer, nullable=True)
     llm_cases_completed = Column(Integer, nullable=True)
     llm_cases_not_evaluated = Column(Integer, nullable=True)

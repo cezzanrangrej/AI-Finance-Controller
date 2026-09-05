@@ -27,6 +27,11 @@ def get_run_metrics(run_id: str, db: Session = Depends(get_db)):
     exception_reasons = [t.exception_type for t in transactions if t.status == "EXCEPTION" and t.exception_type]
     breakdown = dict(Counter(exception_reasons))
 
+    pre_res = getattr(run, "pre_resolved_count", None)
+    if pre_res is None and getattr(run, "llm_cases_selected", None) is not None:
+        pre_res = max(0, run.initial_exceptions - run.llm_cases_selected)
+    llm_auto_res = (run.ai_auto_resolved - (pre_res or 0)) if pre_res is not None else run.ai_auto_resolved
+
     return MetricsResponse(
         run_id=run.id,
         total_records=run.total_records,
@@ -47,6 +52,11 @@ def get_run_metrics(run_id: str, db: Session = Depends(get_db)):
         prompt_tokens=getattr(run, "prompt_tokens", None),
         completion_tokens=getattr(run, "completion_tokens", None),
         total_tokens=getattr(run, "total_tokens", None),
+        pre_resolved_count=pre_res or 0,
+        llm_auto_resolved=llm_auto_res,
+        llm_cases_selected=getattr(run, "llm_cases_selected", None),
+        llm_cases_completed=getattr(run, "llm_cases_completed", None),
+        llm_cases_not_evaluated=getattr(run, "llm_cases_not_evaluated", None),
         # Passed through verbatim. These were previously `x or 100.0`, which
         # turned both an unmeasured NULL *and* a genuine 0.0 into a perfect
         # score. None here means "not measured" and renders as N/A.

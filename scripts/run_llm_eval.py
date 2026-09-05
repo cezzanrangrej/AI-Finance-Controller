@@ -40,6 +40,11 @@ from src.agent.evaluator import (
     partition_evaluation_runs,
 )
 from src.agent.schemas import AgentDecision
+from src.agent.pre_filter import (
+    prefilter_proven_exceptions,
+    print_pre_filter_header,
+    print_pre_filter_summary,
+)
 from src.agent.tools import FinancialToolkit
 from src.db.database import SessionLocal, init_db
 from src.db.repository import FinanceRepository
@@ -338,16 +343,46 @@ def run_evaluation(
                 llm_client.reset_cumulative_tokens()
 
             print(f"--- Starting Run {run_num}/{runs} ({len(run_cases)} cases | Mode: {eval_mode.upper()}) ---")
-            agent_decisions: List[AgentDecision] = []
-            investigation_logs: List[Dict[str, Any]] = []
+
+            # Deterministic proof runs before batching and before any model call.
+            # The agent controllers no longer re-check the arithmetic after the
+            # Verifier, so a provable case has to be claimed here or it is not
+            # claimed at all. The split is deterministic, so a resumed run
+            # reproduces exactly the same partition.
+            print_pre_filter_header()
+            pre_filter = prefilter_proven_exceptions(run_cases, toolkit)
+            print_pre_filter_summary(pre_filter)
+            llm_cases = pre_filter.ambiguous_exceptions
+
+            agent_decisions: List[AgentDecision] = list(pre_filter.proven_decisions)
+            investigation_logs: List[Dict[str, Any]] = [
+                {
+                    "transaction_id": d.transaction_id,
+                    "initial_exception": d.exception_type or "UNKNOWN",
+                    "tools_used": pre_filter.tool_provenance.get(d.transaction_id, []),
+                    "evidence": d.evidence or [],
+                    "decision": d.decision,
+                    "resolution_type": d.resolution_type or "NONE",
+                    "resolved_difference": d.resolved_difference,
+                    "reason": d.reason,
+                    "confidence": d.confidence,
+                    "recommended_action": d.recommended_action,
+                    "tool_call_count": len(pre_filter.tool_provenance.get(d.transaction_id, [])),
+                    "tool_traces": [],
+                    "investigator_calls": 0,
+                    "verifier_calls": 0,
+                    "model_interactions": 0,
+                }
+                for d in pre_filter.proven_decisions
+            ]
 
             cases_selected = len(run_cases)
-            cases_completed = 0
+            cases_completed = pre_filter.pre_resolved_count
             cases_not_evaluated = 0
 
             if eval_mode == "batch":
                 from src.agent.batch_partitioner import partition_exceptions_balanced
-                chunks = partition_exceptions_balanced(run_cases, batch_size=batch_size)
+                chunks = partition_exceptions_balanced(llm_cases, batch_size=batch_size) if llm_cases else []
                 total_batches_in_run = len(chunks)
                 concurrency_limit = src.config.get_max_parallel_batches()
                 if parallel_batches is not None:
@@ -389,7 +424,12 @@ def run_evaluation(
                                 else:
                                     cases_completed += 1
 
-                if actual_parallel_batches == 1:
+                if not chunks:
+                    print(
+                        f"Every exception in this run was closed by deterministic proof "
+                        f"({pre_filter.pre_resolved_count} case(s)) — no LLM invocation required.\n"
+                    )
+                elif actual_parallel_batches == 1:
                     # Sequential mode!
                     for b_idx, chunk in enumerate(chunks, 1):
                         if b_idx in completed_batch_numbers:
@@ -536,6 +576,8 @@ def run_evaluation(
                     print("BALANCED PARALLEL BATCH PLAN")
                     print("========================================\n")
                     print(f"Cases selected:          {len(run_cases)}")
+                    print(f"Pre-resolved (proof):     {pre_filter.pre_resolved_count}")
+                    print(f"Cases sent to AI:         {len(llm_cases)}")
                     print(f"Batch size:               {batch_size}")
                     print(f"Total batches:            {total_batches_in_run}")
                     print(f"Concurrency limit:        {concurrency_limit}")
@@ -563,7 +605,7 @@ def run_evaluation(
                             run_id=run_id,
                             run_num=run_num,
                             total_runs=runs,
-                            cases_per_run=cases_selected,
+                            cases_per_run=len(llm_cases),
                             batch_size=batch_size,
                             selected_provider=selected_provider,
                             client_model=client_model,
@@ -600,12 +642,17 @@ def run_evaluation(
 
             else:
                 # Individual or Multi-Agent mode
-                for idx, exc in enumerate(run_cases, 1):
+                if not llm_cases:
+                    print(
+                        f"Every exception in this run was closed by deterministic proof "
+                        f"({pre_filter.pre_resolved_count} case(s)) — no LLM invocation required.\n"
+                    )
+                for idx, exc in enumerate(llm_cases, 1):
                     txn_id = exc.get("transaction_id", "UNKNOWN")
                     reason = exc.get("reason", "UNKNOWN")
                     t_case_start = time.time()
                     mode_label = "Multi-Agent" if eval_mode == "multi-agent" else "Individual"
-                    print(f"  [{idx}/{cases_selected}] Investigating {txn_id} ({reason}) [{mode_label}]...")
+                    print(f"  [{idx}/{len(llm_cases)}] Investigating {txn_id} ({reason}) [{mode_label}]...")
 
                     if eval_mode == "multi-agent":
                         decision, log = multi_agent.investigate_exception(exc)
@@ -703,7 +750,9 @@ def run_evaluation(
                 run_total_tokens = getattr(llm_client, "cumulative_total_tokens", 0)
                 total_inv_calls = 0
                 total_ver_calls = 0
-                total_interactions = cases_completed
+                # One interaction per case an agent actually handled. Pre-resolved
+                # cases are inside cases_completed but never reached a model.
+                total_interactions = max(cases_completed - pre_filter.pre_resolved_count, 0)
 
             # Compute per-run metrics
             eval_results = evaluate_agent_decisions(
@@ -745,8 +794,8 @@ def run_evaluation(
                 "prompt_tokens": run_prompt_tokens if run_prompt_tokens > 0 else None,
                 "completion_tokens": run_completion_tokens if run_completion_tokens > 0 else None,
                 "total_tokens": run_total_tokens if run_total_tokens > 0 else None,
-                "llm_cases_selected": cases_selected,
-                "llm_cases_completed": cases_completed,
+                "llm_cases_selected": len(llm_cases),
+                "llm_cases_completed": max(cases_completed - pre_filter.pre_resolved_count, 0),
                 "llm_cases_not_evaluated": cases_not_evaluated,
                 "evaluation_group_id": evaluation_group_id,
                 "evaluation_run_number": run_num,
@@ -779,6 +828,10 @@ def run_evaluation(
                 "cases_selected": cases_selected,
                 "cases_completed": cases_completed,
                 "cases_not_evaluated": cases_not_evaluated,
+                # Scope split for the aggregate: tokens are attributable only to
+                # cases_sent_to_ai, never to the pre-resolved ones.
+                "cases_pre_resolved": pre_filter.pre_resolved_count,
+                "cases_sent_to_ai": len(llm_cases),
                 "correct_decisions": eval_results.agent_correct_decisions,
                 "auto_resolved": auto_resolved,
                 "auto_resolved_correct": eval_results.auto_resolved_correct,
@@ -892,6 +945,8 @@ def run_evaluation(
                 print("PARALLEL LLM EVALUATION")
                 print("========================================\n")
                 print(f"Cases selected:           {agg['total_selected']}")
+                print(f"Pre-resolved (proof):     {agg['total_pre_resolved']}  (0 LLM tokens)")
+                print(f"Cases sent to AI:         {agg['total_sent_to_ai']}")
                 print(f"Batch size:               {batch_size}")
                 print(f"Total batches:            {batches_done}")
                 print(f"Concurrency limit:        {concurrency_limit}")
@@ -918,6 +973,8 @@ def run_evaluation(
                 print(f"Provider: {provider_display_name}")
                 print(f"Model: {client_model}\n")
                 print(f"Cases evaluated:            {agg['total_completed']}")
+                print(f"  via Decimal proof:        {agg['total_pre_resolved']} (0 LLM tokens)")
+                print(f"  via AI multi-agent:       {agg['total_sent_to_ai']}")
                 print(f"Batch size:                  {batch_size}")
                 print(f"Batches processed:           {batches_done}\n")
                 print(f"Batch LLM interactions:      {batch_interactions}")
@@ -934,7 +991,8 @@ def run_evaluation(
             total_inv_all = sum(r.get("investigator_calls", 0) for r in eval_sums)
             total_ver_all = sum(r.get("verifier_calls", 0) for r in eval_sums)
             total_ints_all = sum(r.get("total_model_interactions", 0) for r in eval_sums)
-            avg_ints_case = (total_ints_all / agg['total_completed']) if agg['total_completed'] > 0 else 0.0
+            # Interactions are only attributable to cases an agent actually saw.
+            avg_ints_case = (total_ints_all / agg['total_sent_to_ai']) if agg['total_sent_to_ai'] > 0 else 0.0
 
             print("\n========================================")
             print("CONTROLLED MULTI-AGENT EVALUATION")
@@ -943,6 +1001,8 @@ def run_evaluation(
             print(f"Provider: {provider_display_name}")
             print(f"Model: {client_model}\n")
             print(f"Cases evaluated:            {agg['total_completed']}")
+            print(f"  via Decimal proof:        {agg['total_pre_resolved']} (0 LLM tokens)")
+            print(f"  via AI multi-agent:       {agg['total_sent_to_ai']}")
             print(f"Decision accuracy:           {_fmt_pct(agg['decision_accuracy'])}")
             print(f"Auto-resolution precision:   {_fmt_pct(agg['auto_resolution_precision'])}")
             print(f"Auto-resolution recall:      {_fmt_pct(agg['auto_resolution_recall'])}")

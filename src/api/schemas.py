@@ -28,6 +28,8 @@ class RunSummaryResponse(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    pre_resolved_count: Optional[int] = 0
+    llm_auto_resolved: Optional[int] = None
     llm_cases_selected: Optional[int] = None
     llm_cases_completed: Optional[int] = None
     llm_cases_not_evaluated: Optional[int] = None
@@ -88,6 +90,8 @@ class MetricsResponse(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    pre_resolved_count: Optional[int] = 0
+    llm_auto_resolved: Optional[int] = None
     llm_cases_selected: Optional[int] = None
     llm_cases_completed: Optional[int] = None
     llm_cases_not_evaluated: Optional[int] = None

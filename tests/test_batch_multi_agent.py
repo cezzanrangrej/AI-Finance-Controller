@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
+from src.agent.batch_partitioner import partition_exceptions_balanced
 from src.agent.controller import LLMClient
+from src.agent.pre_filter import prefilter_proven_exceptions
 from src.agent.schemas import AgentDecision
 from src.agent.tools import FinancialToolkit
 from src.generator import SyntheticDataGenerator
@@ -168,13 +170,53 @@ def test_batch_multi_agent_verifier_escalation(sample_multi_agent_toolkit_and_ex
     assert "Verifier escalated to human review" in decisions[0].reason
 
 
-def test_batch_multi_agent_deterministic_proof_override(sample_multi_agent_toolkit_and_exceptions):
-    """Verifies that authoritative Python decimal proof overrides LLM hesitation."""
+def test_provable_case_never_reaches_batch_controller(sample_multi_agent_toolkit_and_exceptions):
+    """
+    The deterministic pre-filter runs before batch partitioning, so an exception
+    an adjustment record already explains is resolved in Python and is absent
+    from every batch handed to the controller.
+
+    This is the contract that removing the controller's post-LLM proof override
+    depends on: if a provable case could still reach a batch, the override would
+    still be needed.
+    """
     toolkit, exceptions, _ = sample_multi_agent_toolkit_and_exceptions
-    # Pick a case with valid adjustment
-    adj_exc = next((e for e in exceptions if e.get("reason") == "BANK_AMOUNT_MISMATCH" and toolkit.get_adjustments(e.get("transaction_id")).get("adjustments")), exceptions[0])
+
+    result = prefilter_proven_exceptions(exceptions, toolkit)
+
+    assert result.pre_resolved_count > 0, "fixture must contain at least one provable exception"
+    assert result.total == len(exceptions), "every exception must be accounted for exactly once"
+
+    proven_ids = {d.transaction_id for d in result.proven_decisions}
+    forwarded_ids = {e["transaction_id"] for e in result.ambiguous_exceptions}
+    assert proven_ids.isdisjoint(forwarded_ids)
+
+    batches = partition_exceptions_balanced(result.ambiguous_exceptions, batch_size=5)
+    batched_ids = {c["transaction_id"] for b in batches for c in b}
+    assert batched_ids == forwarded_ids
+    assert proven_ids.isdisjoint(batched_ids)
+
+    for d in result.proven_decisions:
+        assert d.decision == "AUTO_RESOLVED"
+        assert d.resolution_source == "DETERMINISTIC_PROOF"
+        assert d.model_interactions == 0
+
+
+def test_batch_controller_does_not_override_agents_with_proof(sample_multi_agent_toolkit_and_exceptions):
+    """
+    A provable case is forced through the controller anyway (which the pipeline
+    never does) to pin the removal of the legacy Step 4 override: the agents'
+    verdict now stands, unmodified by arithmetic.
+    """
+    toolkit, exceptions, _ = sample_multi_agent_toolkit_and_exceptions
+
+    # Select a case the pre-filter proves, so the old override would have fired.
+    pre_filter = prefilter_proven_exceptions(exceptions, toolkit)
+    assert pre_filter.pre_resolved_count > 0
+    proven_id = pre_filter.proven_decisions[0].transaction_id
+    adj_exc = next(e for e in exceptions if e["transaction_id"] == proven_id)
     batch = [adj_exc]
-    txn_id = batch[0]["transaction_id"]
+    txn_id = proven_id
 
     controller = BatchMultiAgentController(toolkit=toolkit, provider="demo")
 
@@ -213,8 +255,8 @@ def test_batch_multi_agent_deterministic_proof_override(sample_multi_agent_toolk
     decisions, log = controller.investigate_batch(batch)
 
     assert len(decisions) == 1
-    # If the case has deterministic proof in toolkit, it overrides to AUTO_RESOLVED
-    adjs = toolkit.get_adjustments(txn_id).get("adjustments", [])
-    if adjs:
-        assert decisions[0].decision == "AUTO_RESOLVED"
-        assert decisions[0].confidence == 1.0
+    # Arithmetic no longer speaks here: the agents agreed on HUMAN_REVIEW and that
+    # is what comes out, even though the case is provable.
+    assert decisions[0].decision == "HUMAN_REVIEW"
+    assert decisions[0].resolution_source == "MULTI_AGENT_CONSENSUS"
+    assert decisions[0].resolution_source != "DETERMINISTIC_PROOF"

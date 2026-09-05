@@ -4,30 +4,27 @@ Batch Multi-Agent Investigation Controller for AI Finance Controller.
 Executes unified Phase 2 reconciliation:
 1. Prefetches deterministic evidence for all cases in a batch.
 2. Invokes Investigator Agent in batch mode to formulate resolution proposals.
-3. Enforces authoritative Python Decimal proof verification (`has_sufficient_resolution_evidence`).
-4. Invokes Verifier Agent in batch mode to independently critique proposals against ground evidence.
-5. Applies consensus and escalation policies to produce final AgentDecisions.
+3. Invokes Verifier Agent in batch mode to independently critique proposals against ground evidence.
+4. Applies consensus and escalation policies to produce final AgentDecisions.
+
+Deterministic arithmetic proof is *not* applied here. Exceptions an adjustment
+record already explains are resolved before batching, by
+`src.agent.pre_filter.prefilter_proven_exceptions`, so every case reaching this
+controller is already known to be unprovable by arithmetic. Re-checking the
+proof after the Verifier ran was redundant work whose only effect was to
+overrule the agents on cases that should never have been sent to them.
 """
 
 from datetime import datetime, timezone
-import json
 import logging
-import os
-import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.agent.batch_controller import prefetch_case_evidence
-from src.agent.json_utils import clean_json_string, repair_and_parse_json
+from src.agent.json_utils import repair_and_parse_json
 from src.agent.rate_limit import LLMRateLimitError
-from src.agent.controller import (
-    AgentController,
-    EvidenceState,
-    LLMClient,
-    build_proven_adjustment_resolution,
-    has_sufficient_resolution_evidence,
-)
+from src.agent.controller import LLMClient
 from src.agent.multi_agent.orchestrator import MultiAgentOrchestrator
 from src.agent.provider_resolution import (
     ProviderResolution,
@@ -45,10 +42,6 @@ from src.agent.schemas import (
     AgentDecision,
     BatchInvestigationCase,
     BatchInvestigationLog,
-    BatchInvestigatorResponse,
-    BatchVerifierResponse,
-    InvestigationProposal,
-    VerificationResult,
 )
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer, default_tracer
@@ -222,41 +215,18 @@ class BatchMultiAgentController:
                     ver_content[-200:] if ver_content else "",
                 )
 
-        # Step 4: Deterministic Proof Verification & Multi-Agent Consensus Resolution
+        # Step 4: Multi-Agent Consensus Resolution
+        #
+        # No deterministic proof pass here. `src.agent.pre_filter` already
+        # resolved every arithmetically provable case before this batch was
+        # formed, so consensus between the Investigator's proposal and the
+        # Verifier's critique is the only decision left to make.
         batch_decisions_map: Dict[str, AgentDecision] = {}
 
         for case in prefetched_cases:
             tid = case.transaction_id
             exc_rec = cases_map.get(tid, {})
             exc_type = exc_rec.get("reason", "UNKNOWN")
-
-            state = EvidenceState(tid)
-            state.payment = case.payment
-            state.ledger = case.ledger
-            state.bank_records = case.bank_records
-            state.adjustments = case.adjustments
-            state.duplicate_check = case.duplicate_check
-            state.expected_settlement = case.expected_settlement
-            state.adjusted_expected_settlement = case.adjusted_expected_settlement
-
-            # Authoritative deterministic proof check
-            is_proven, proof_data = has_sufficient_resolution_evidence(state, exc_type)
-            if is_proven and proof_data:
-                proven = build_proven_adjustment_resolution(
-                    txn_id=tid,
-                    exception_type=exc_type,
-                    evidence=[f"Phase 1 exception: {exc_type}"],
-                    resolution_data=proof_data,
-                )
-                # No LLM decided this case -- a Decimal proof did. Record that
-                # honestly rather than crediting the agents with it.
-                proven.agent_mode = "BATCH_MULTI_AGENT"
-                proven.resolution_source = "DETERMINISTIC_PROOF"
-                proven.investigator_calls = 0
-                proven.verifier_calls = 0
-                proven.model_interactions = 0
-                batch_decisions_map[tid] = proven
-                continue
 
             # Multi-Agent Consensus Policy
             inv_prop = proposals_map.get(tid)
@@ -410,8 +380,3 @@ class BatchMultiAgentController:
             raw = getattr(client, attr, 0) or 0
             values.append(int(raw) if isinstance(raw, (int, float)) else 0)
         return values[0], values[1], values[2]
-
-    @staticmethod
-    def _clean_json(raw_content: str) -> str:
-        """Strips markdown code fences and cleans JSON output."""
-        return clean_json_string(raw_content)

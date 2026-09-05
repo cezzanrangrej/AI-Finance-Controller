@@ -11,6 +11,7 @@ from src.agent.controller import AgentController, LLMClient, MAX_TOOL_CALLS
 from src.agent.multi_agent.investigator import InvestigatorAgent
 from src.agent.multi_agent.orchestrator import MultiAgentOrchestrator
 from src.agent.multi_agent.verifier import VerifierAgent
+from src.agent.pre_filter import prefilter_proven_exceptions
 from src.agent.schemas import AgentDecision, InvestigationProposal, VerificationResult
 from src.agent.tools import FinancialToolkit
 from src.generator import SyntheticDataGenerator
@@ -174,9 +175,36 @@ def test_verifier_independently_checks_evidence():
 
 # ----------------------------------------------------------------------
 # Test 4: Both agents agree -> AUTO_RESOLVED
+#
+# Both agents are mocked. The orchestrator no longer applies arithmetic proof
+# (the pre-filter does, upstream), so a case that reaches it and comes back
+# AUTO_RESOLVED must have been resolved by agent consensus and nothing else --
+# which is exactly the branch under test.
 # ----------------------------------------------------------------------
 def test_both_agents_agree_auto_resolved(sample_toolkit_data):
+    mock_inv_llm = MagicMock(spec=LLMClient)
+    mock_inv_llm.chat.return_value = MockResponse(MockMessage(content=json.dumps({
+        "transaction_id": "TXN034",
+        "exception_type": "BANK_AMOUNT_MISMATCH",
+        "evidence": ["Adjustment ADJ001 documents a 100 processing fee."],
+        "proposed_resolution": "AUTO_RESOLVED",
+        "resolution_type": "ADJUSTMENT_EXPLAINED",
+        "resolved_difference": 100,
+        "confidence": 0.95,
+    })))
+
+    mock_ver_llm = MagicMock(spec=LLMClient)
+    mock_ver_llm.chat.return_value = MockResponse(MockMessage(content=json.dumps({
+        "transaction_id": "TXN034",
+        "verified": True,
+        "decision": "AUTO_RESOLVED",
+        "reason": "Adjustment record accounts for the full difference.",
+        "confidence": 0.95,
+    })))
+
     orchestrator = MultiAgentOrchestrator(toolkit=sample_toolkit_data, provider="demo")
+    orchestrator.investigator = InvestigatorAgent(toolkit=sample_toolkit_data, llm_client=mock_inv_llm)
+    orchestrator.verifier = VerifierAgent(llm_client=mock_ver_llm)
 
     exc = {
         "transaction_id": "TXN034",
@@ -195,6 +223,8 @@ def test_both_agents_agree_auto_resolved(sample_toolkit_data):
     assert decision.resolution_type == "ADJUSTMENT_EXPLAINED"
     assert log.decision == "AUTO_RESOLVED"
     assert log.agent_mode == "MULTI_AGENT"
+    assert log.resolution_source == "MULTI_AGENT_CONSENSUS"
+    assert log.disagreement_detected is False
 
 
 # ----------------------------------------------------------------------
@@ -277,9 +307,45 @@ def test_disagreement_investigator_human_verifier_auto_no_proof(sample_toolkit_d
 
 
 # ----------------------------------------------------------------------
-# Test 7: Deterministic proof overrides disagreement
+# Test 7: Arithmetic proof is claimed by the pre-filter, before any agent runs
 # ----------------------------------------------------------------------
-def test_deterministic_proof_overrides_disagreement(sample_toolkit_data):
+def test_pre_filter_claims_proven_case_before_any_agent(sample_toolkit_data):
+    exc = {
+        "transaction_id": "TXN034",
+        "reason": "BANK_AMOUNT_MISMATCH",
+        "expected_net_amount": 9800,
+        "bank_amount": 9700,
+        "difference": 100,
+    }
+
+    result = prefilter_proven_exceptions([exc], sample_toolkit_data)
+
+    # expected 9800 - adjustment 100 == bank 9700, so Decimal settles it outright.
+    assert result.pre_resolved_count == 1
+    assert result.remaining_count == 0
+    assert result.ambiguous_exceptions == []
+
+    decision = result.proven_decisions[0]
+    assert decision.transaction_id == "TXN034"
+    assert decision.decision == "AUTO_RESOLVED"
+    assert decision.resolution_type == "ADJUSTMENT_EXPLAINED"
+    assert decision.resolution_source == "DETERMINISTIC_PROOF"
+    assert decision.agent_mode == "DETERMINISTIC_PRE_FILTER"
+    # No agent ran, so no call may be attributed to one.
+    assert decision.model_interactions == 0
+    assert decision.investigator_calls == 0
+    assert decision.verifier_calls == 0
+
+
+# ----------------------------------------------------------------------
+# Test 7b: The orchestrator no longer overrules the Verifier with arithmetic
+#
+# The post-hoc proof override was removed deliberately: a provable case never
+# reaches the agents in the first place, so if one is forced through anyway the
+# Verifier's escalation stands. This pins that removal so it cannot silently
+# come back.
+# ----------------------------------------------------------------------
+def test_orchestrator_does_not_override_verifier_with_proof(sample_toolkit_data):
     mock_ver_llm = MagicMock(spec=LLMClient)
     ver_json = json.dumps({
         "transaction_id": "TXN034",
@@ -302,10 +368,9 @@ def test_deterministic_proof_overrides_disagreement(sample_toolkit_data):
     }
     decision, log = orchestrator.investigate_exception(exc)
 
-    # Deterministic proof (expected 9800 - adjustment 100 == bank 9700) proves AUTO_RESOLVED
-    assert decision.decision == "AUTO_RESOLVED"
-    assert decision.resolution_type == "ADJUSTMENT_EXPLAINED"
-    assert log.resolution_source == "DETERMINISTIC_EVIDENCE"
+    assert decision.decision == "HUMAN_REVIEW"
+    assert log.resolution_source == "VERIFIER_ESCALATION"
+    assert log.resolution_source != "DETERMINISTIC_EVIDENCE"
 
 
 # ----------------------------------------------------------------------

@@ -280,7 +280,14 @@ def test_multi_agent_mode_trace(sample_toolkit):
     assert "[VERIFIER | DEMO]" in out
     assert "[FINAL CONTROLLER]" in out
     assert "TRANSACTION SUMMARY" in out
-    assert decision.decision == "AUTO_RESOLVED"
+    # The orchestrator no longer applies arithmetic proof (the pre-filter does,
+    # before batching), so whatever it decides here came from the two agents.
+    assert decision.decision in ("AUTO_RESOLVED", "HUMAN_REVIEW")
+    assert log.resolution_source in (
+        "MULTI_AGENT_CONSENSUS",
+        "VERIFIER_ESCALATION",
+        "DISAGREEMENT_SAFEGUARD",
+    )
 
 
 # ----------------------------------------------------------------------

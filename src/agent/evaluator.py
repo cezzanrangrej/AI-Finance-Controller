@@ -266,11 +266,21 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
             "average_case_latency_sec": 0.0,
             "total_tokens": 0,
             "average_tokens_per_case": 0,
+            "total_pre_resolved": 0,
+            "total_sent_to_ai": 0,
         }
 
     total_selected = sum(r.get("cases_selected", 0) for r in run_summaries)
     total_completed = sum(r.get("cases_completed", 0) for r in run_summaries)
     total_not_evaluated = sum(r.get("cases_not_evaluated", 0) for r in run_summaries)
+    total_pre_resolved = sum(r.get("cases_pre_resolved", 0) for r in run_summaries)
+
+    # Runs recorded before deterministic pre-filtering existed carry no
+    # ``cases_sent_to_ai`` key; for those every completed case did reach a model,
+    # so falling back to ``cases_completed`` keeps old reports reading the same.
+    total_sent_to_ai = sum(
+        r.get("cases_sent_to_ai", r.get("cases_completed", 0)) for r in run_summaries
+    )
 
     total_correct = sum(r.get("correct_decisions", 0) for r in run_summaries)
     total_auto_resolved = sum(r.get("auto_resolved", 0) for r in run_summaries)
@@ -288,7 +298,12 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
     human_review_rate = (total_human_review / total_completed * 100) if total_completed > 0 else 0.0
     not_evaluated_rate = (total_not_evaluated / total_selected * 100) if total_selected > 0 else 0.0
     avg_latency = (total_time / total_completed) if total_completed > 0 else 0.0
-    avg_tokens = round(total_tokens / total_completed) if total_completed > 0 else 0
+
+    # Tokens are only spent on cases a model actually saw. Deterministically
+    # pre-resolved cases cost nothing, so including them in the denominator would
+    # report a per-case cost no model ever incurred -- and would make the number
+    # fall as pre-filtering improved rather than as the prompts got cheaper.
+    avg_tokens = round(total_tokens / total_sent_to_ai) if total_sent_to_ai > 0 else 0
 
     return {
         "evaluation_runs_total": len(run_summaries),
@@ -306,6 +321,8 @@ def compute_aggregate_metrics(run_summaries: List[Dict[str, Any]]) -> Dict[str, 
         "average_case_latency_sec": round(avg_latency, 4),
         "total_tokens": total_tokens,
         "average_tokens_per_case": avg_tokens,
+        "total_pre_resolved": total_pre_resolved,
+        "total_sent_to_ai": total_sent_to_ai,
     }
 
 

@@ -45,6 +45,18 @@ export default function Header({
         </span>
       );
     }
+    if (progressState?.stage === 'PRE_BATCH') {
+      const pb = progressState?.preBatch;
+      const label = pb && pb.total > 0
+        ? `Pre-Batch: ${pb.preResolved} proven, ${pb.remaining} to AI`
+        : 'Pre-Batch: Evaluating Proofs...';
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-primary/10 text-text border border-primary/30">
+          <Loader2 className="h-3 w-3 animate-spin text-primary" />
+          {label}
+        </span>
+      );
+    }
     if (progressState?.stage === 'PHASE_2' || workflowState === 'RUNNING_AI') {
       const p2 = progressState?.phase2;
       const label =

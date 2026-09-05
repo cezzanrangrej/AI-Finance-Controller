@@ -190,11 +190,14 @@ def test_batch_mode_integration(temp_dataset_dir):
         mock_instance = mock_batch_cls.return_value
         mock_instance.investigate_batch.return_value = ([mock_decision], mock_log)
 
+        # Two cases, not one: the deterministic pre-filter closes the first
+        # selected exception outright, so a single case would never reach the
+        # batch controller at all.
         exit_code = main([
             "--data-dir", data_dir,
             "--mode", "batch",
             "--provider", "demo",
-            "--cases", "1",
+            "--cases", "2",
         ])
         assert exit_code == 0
         assert mock_instance.investigate_batch.called
@@ -213,11 +216,13 @@ def test_individual_mode_integration(temp_dataset_dir):
         mock_instance = mock_agent_cls.return_value
         mock_instance.investigate_exception.return_value = (mock_decision, mock_log)
 
+        # Two cases: the first selected exception is closed by the deterministic
+        # pre-filter, so only the second reaches the individual agent.
         exit_code = main([
             "--data-dir", data_dir,
             "--mode", "individual",
             "--provider", "demo",
-            "--cases", "1",
+            "--cases", "2",
         ])
         assert exit_code == 0
         assert mock_instance.investigate_exception.called
@@ -239,11 +244,13 @@ def test_multi_agent_integration(temp_dataset_dir):
         mock_instance = mock_batch_cls.return_value
         mock_instance.investigate_batch.return_value = ([mock_decision], mock_log)
 
+        # Two cases: the deterministic pre-filter closes the first, so the
+        # multi-agent batch path only engages for the remainder.
         exit_code = main([
             "--data-dir", data_dir,
             "--mode", "multi-agent",
             "--provider", "demo",
-            "--cases", "1",
+            "--cases", "2",
         ])
         assert exit_code == 0
         assert mock_instance.investigate_batch.called

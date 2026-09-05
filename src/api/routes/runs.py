@@ -18,6 +18,12 @@ from sqlalchemy.orm import Session
 
 from decimal import Decimal
 from src.agent.evaluator import evaluate_agent_decisions
+from src.agent.pre_filter import (
+    PreFilterResult,
+    prefilter_proven_exceptions,
+    print_pre_filter_header,
+    print_pre_filter_summary,
+)
 from src.agent.schemas import AgentDecision
 from src.agent.tools import FinancialToolkit
 from src.agent.trace import AgentTracer
@@ -82,6 +88,52 @@ def _assert_accounting_invariant(final_resolved: int, final_unresolved: int, tot
             f"({final_resolved}) + final_unresolved ({final_unresolved}) "
             f"!= total_records ({total_records}); run not persisted."
         )
+
+
+def _build_investigation_log(
+    decision: AgentDecision,
+    initial_exception: str,
+    tools_used: List[str],
+) -> Dict[str, Any]:
+    """
+    Projects an AgentDecision onto the audit-log row shape the repository
+    persists. Shared so deterministically pre-resolved cases and agent-resolved
+    cases appear in the audit trail identically.
+    """
+    return {
+        "transaction_id": decision.transaction_id,
+        "initial_exception": decision.exception_type or initial_exception,
+        "tools_used": tools_used,
+        "evidence": decision.evidence or [],
+        "decision": decision.decision,
+        "resolution_type": decision.resolution_type or "NONE",
+        "resolved_difference": decision.resolved_difference,
+        "reason": decision.reason,
+        "confidence": decision.confidence,
+        "recommended_action": decision.recommended_action,
+        "tool_call_count": len(tools_used),
+        "tool_traces": [],
+        "resolution_source": decision.resolution_source,
+        "model_interactions": decision.model_interactions,
+    }
+
+
+def _pre_filter_investigation_logs(
+    pre_filter: PreFilterResult,
+    exceptions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Audit-log rows for exceptions closed by arithmetic before any LLM call."""
+    reasons = {
+        str(e.get("transaction_id", "")): e.get("reason", "UNKNOWN") for e in exceptions
+    }
+    return [
+        _build_investigation_log(
+            d,
+            initial_exception=reasons.get(d.transaction_id, "UNKNOWN"),
+            tools_used=list(pre_filter.tool_provenance.get(d.transaction_id, [])),
+        )
+        for d in pre_filter.proven_decisions
+    ]
 
 
 def _resolve_investigation_providers(provider: Optional[str] = None) -> ProviderResolution:
@@ -151,6 +203,11 @@ def _run_summary_from_model(run_model: Any) -> RunSummaryResponse:
     previously each built this by hand and drifted apart, which is how the
     hardcoded accuracy figures survived on one path only.
     """
+    pre_res = getattr(run_model, "pre_resolved_count", None)
+    if pre_res is None and getattr(run_model, "llm_cases_selected", None) is not None:
+        pre_res = max(0, run_model.initial_exceptions - run_model.llm_cases_selected)
+    llm_auto_res = (run_model.ai_auto_resolved - (pre_res or 0)) if pre_res is not None else run_model.ai_auto_resolved
+
     return RunSummaryResponse(
         run_id=run_model.id,
         created_at=run_model.created_at.isoformat(),
@@ -170,6 +227,8 @@ def _run_summary_from_model(run_model: Any) -> RunSummaryResponse:
         prompt_tokens=getattr(run_model, "prompt_tokens", None),
         completion_tokens=getattr(run_model, "completion_tokens", None),
         total_tokens=getattr(run_model, "total_tokens", None),
+        pre_resolved_count=pre_res or 0,
+        llm_auto_resolved=llm_auto_res,
         llm_cases_selected=getattr(run_model, "llm_cases_selected", None),
         llm_cases_completed=getattr(run_model, "llm_cases_completed", None),
         llm_cases_not_evaluated=getattr(run_model, "llm_cases_not_evaluated", None),
@@ -433,11 +492,36 @@ def _execute_reconciliation_pipeline(
         print(f"----------------------------------------", flush=True)
         for exc_type, count in sorted(phase1_metrics.get("breakdown", {}).items()):
             print(f"  {exc_type:<30} {count}", flush=True)
-        print(f"========================================\n", flush=True)
+        print(f"========================================", flush=True)
 
-        # Step 4: Phase 2 AI agent investigation via BatchMultiAgentController
+        # Step 4: Phase 2 exception resolution.
+        #
+        # Deterministic proof runs first. Any exception a documented adjustment
+        # already explains arithmetically is closed here, in Python, before a
+        # batch is formed -- zero tokens, zero API calls. Only what arithmetic
+        # cannot settle is partitioned and sent to the agents, which is why the
+        # controllers no longer carry a post-LLM override.
         t_p2_start = time.time()
         toolkit = FinancialToolkit(payments_data, ledger_data, bank_data, adjustments_data)
+
+        if event_callback:
+            event_callback({
+                "event": "pre_filter_started",
+                "total_exceptions": len(exceptions),
+            })
+
+        print_pre_filter_header()
+        pre_filter = prefilter_proven_exceptions(exceptions, toolkit)
+        ambiguous_exceptions = pre_filter.ambiguous_exceptions
+        print_pre_filter_summary(pre_filter)
+
+        if event_callback:
+            event_callback({
+                "event": "pre_filter_completed",
+                "total_exceptions": pre_filter.total,
+                "pre_resolved_count": pre_filter.pre_resolved_count,
+                "remaining_for_ai": pre_filter.remaining_count,
+            })
 
         # Resolve both roles once, then hand the resolution to the controller so
         # it cannot re-derive a different answer from the environment.
@@ -456,20 +540,30 @@ def _execute_reconciliation_pipeline(
             toolkit=toolkit, resolution=resolution, tracer=agent_tracer
         )
         effective_batch_size = max(1, min(int(batch_size or 5), 10))
-        chunks = partition_exceptions_balanced(exceptions, batch_size=effective_batch_size) if exceptions else []
+        chunks = (
+            partition_exceptions_balanced(ambiguous_exceptions, batch_size=effective_batch_size)
+            if ambiguous_exceptions
+            else []
+        )
         max_parallel_workers = max(1, min(len(chunks), int(os.getenv("MAX_PARALLEL_BATCHES", "5")))) if chunks else 1
 
         if chunks:
-            print(f"--- Investigating {len(exceptions)} exception(s) [MULTI-AGENT BATCH PARALLEL] ---", flush=True)
+            print(f"--- Investigating {len(ambiguous_exceptions)} exception(s) [MULTI-AGENT BATCH PARALLEL] ---", flush=True)
             print(f"Batches: {len(chunks)} | Batch Size: {effective_batch_size} | Concurrency: {max_parallel_workers} | Provider: {resolution.provider_label}\n", flush=True)
+        elif pre_filter.pre_resolved_count:
+            print("[Phase 2] Every Phase 1 exception was closed by deterministic proof — no LLM invocation required.", flush=True)
         else:
             print("[Phase 2] No exceptions to investigate.", flush=True)
 
-        # Step 5: Milestone — Phase 2 started
+        # Step 5: Milestone — Phase 2 started.
+        # exception_count is the AI workload, not the Phase 1 total: the
+        # pre-filtered cases are already resolved and are never batched.
         if event_callback:
             event_callback({
                 "event": "phase2_started",
-                "exception_count": len(exceptions),
+                "exception_count": len(ambiguous_exceptions),
+                "pre_resolved_count": pre_filter.pre_resolved_count,
+                "total_exceptions": pre_filter.total,
                 "batch_count": len(chunks),
                 "batch_size": effective_batch_size,
                 "batch_details": [
@@ -478,9 +572,12 @@ def _execute_reconciliation_pipeline(
                 ],
             })
 
-        agent_decisions = []
-        investigation_logs = []
-        cumulative_resolved = 0
+        # Deterministically pre-resolved cases lead the decision list. They must
+        # be part of it: the accounting invariant below requires exactly one
+        # decision per Phase 1 exception.
+        agent_decisions = list(pre_filter.proven_decisions)
+        investigation_logs = _pre_filter_investigation_logs(pre_filter, exceptions)
+        cumulative_resolved = pre_filter.pre_resolved_count
         cumulative_human_review = 0
         cumulative_not_evaluated = 0
         degraded_cases = 0
@@ -673,6 +770,8 @@ def _execute_reconciliation_pipeline(
                                 "cumulative_resolved": cumulative_resolved,
                                 "cumulative_human_review": cumulative_human_review,
                                 "cumulative_not_evaluated": cumulative_not_evaluated,
+                                "pre_resolved_count": pre_filter.pre_resolved_count,
+                                "llm_auto_resolved": cumulative_resolved - pre_filter.pre_resolved_count,
                             })
 
         # Reassemble decisions and logs strictly in original chunk order for determinism
@@ -699,24 +798,13 @@ def _execute_reconciliation_pipeline(
             for d in chunk_decisions:
                 agent_decisions.append(d)
                 exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
-                tools_used = list(tool_provenance.get(d.transaction_id, []))
-                t_log = {
-                    "transaction_id": d.transaction_id,
-                    "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
-                    "tools_used": tools_used,
-                    "evidence": d.evidence or [],
-                    "decision": d.decision,
-                    "resolution_type": d.resolution_type or "NONE",
-                    "resolved_difference": d.resolved_difference,
-                    "reason": d.reason,
-                    "confidence": d.confidence,
-                    "recommended_action": d.recommended_action,
-                    "tool_call_count": len(tools_used),
-                    "tool_traces": [],
-                    "resolution_source": d.resolution_source,
-                    "model_interactions": d.model_interactions,
-                }
-                investigation_logs.append(t_log)
+                investigation_logs.append(
+                    _build_investigation_log(
+                        d,
+                        initial_exception=exc_obj.get("reason", "UNKNOWN"),
+                        tools_used=list(tool_provenance.get(d.transaction_id, [])),
+                    )
+                )
 
         t_p2_end = time.time()
         phase2_time_sec = max(t_p2_end - t_p2_start, 0.001)
@@ -738,12 +826,19 @@ def _execute_reconciliation_pipeline(
         initial_match_rate = phase1_metrics["match_rate"]
         agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
 
+        # Cases the LLM was actually asked about. Kept separate from
+        # `auto_resolved` so pre-filtering cannot be mistaken for agent output.
+        llm_case_count = len(ambiguous_exceptions)
+        llm_auto_resolved = auto_resolved - pre_filter.pre_resolved_count
+
         print(f"========================================", flush=True)
         print(f"RUN SUMMARY [{run_id}]", flush=True)
         print(f"========================================", flush=True)
         print(f"Total Records:      {total_records}", flush=True)
         print(f"Initial Reconciled: {initial_reconciled}", flush=True)
         print(f"Exceptions:         {initial_exceptions}", flush=True)
+        print(f"Pre-Resolved:       {pre_filter.pre_resolved_count}  (deterministic proof, 0 tokens)", flush=True)
+        print(f"Sent to AI:         {llm_case_count}", flush=True)
         print(f"Auto-Resolved:      {auto_resolved}", flush=True)
         print(f"Human Review:       {human_review}", flush=True)
         if not_evaluated:
@@ -781,8 +876,11 @@ def _execute_reconciliation_pipeline(
             }
         else:
             token_totals = _multi_agent_token_totals(batch_agent)
+        # Tokens are only spent on cases the LLM saw, so the denominator is the
+        # AI workload. Dividing by every resolved case would make pre-filtering
+        # look like the model got cheaper.
         tokens_per_case = (
-            (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
+            (token_totals["total_tokens"] or 0) / llm_case_count if llm_case_count else None
         )
 
         # Accuracy is measured, never assumed. With no ground truth every
@@ -844,8 +942,12 @@ def _execute_reconciliation_pipeline(
             "phase1_false_negatives": p1_false_negatives,
             "not_evaluated": not_evaluated,
             "degraded_cases": degraded_cases,
-            "llm_cases_selected": len(exceptions),
-            "llm_cases_completed": auto_resolved + human_review,
+            "pre_resolved_count": pre_filter.pre_resolved_count,
+            # LLM-scoped counts: what was handed to the agents, and how much of
+            # that came back with a verdict. Cases the pre-filter closed are
+            # excluded -- they were never selected for the LLM.
+            "llm_cases_selected": llm_case_count,
+            "llm_cases_completed": llm_auto_resolved + human_review,
             "llm_cases_not_evaluated": not_evaluated,
             "phase1_time_sec": round(phase1_time_sec, 4),
             "phase2_time_sec": round(phase2_time_sec, 4),
@@ -897,6 +999,11 @@ def _execute_reconciliation_pipeline(
                 "not_evaluated": not_evaluated,
                 "degraded_cases": degraded_cases,
                 "has_ground_truth": has_ground_truth,
+                # How the auto-resolutions split between arithmetic proof and the
+                # agents. `ai_auto_resolved` is the total of the two.
+                "pre_resolved_count": pre_filter.pre_resolved_count,
+                "llm_auto_resolved": llm_auto_resolved,
+                "llm_cases_selected": llm_case_count,
                 # Which engine actually produced the Phase-2 verdicts. Without
                 # these the UI could not distinguish a real-model run from one
                 # served entirely by the offline demo emulator, and announced
@@ -1006,6 +1113,11 @@ def stream_run_events(run_id: str, db: Session = Depends(get_db)):
                 # Replay for a client that reconnected after the run finished.
                 # Carries the same honesty fields as the live event so a
                 # reconnecting UI cannot render a failed/degraded run as clean.
+                pre_res = getattr(run, "pre_resolved_count", None)
+                if pre_res is None and getattr(run, "llm_cases_selected", None) is not None:
+                    pre_res = max(0, run.initial_exceptions - run.llm_cases_selected)
+                llm_auto_res = (run.ai_auto_resolved - (pre_res or 0)) if pre_res is not None else run.ai_auto_resolved
+
                 yield "event: run_completed\ndata: " + json.dumps({
                     "run_id": run.id,
                     "final_resolution_rate": run.final_resolution_rate,
@@ -1020,6 +1132,9 @@ def stream_run_events(run_id: str, db: Session = Depends(get_db)):
                     "llm_provider": run.llm_provider,
                     "llm_degraded": bool(getattr(run, "llm_degraded", False)),
                     "llm_degraded_reason": getattr(run, "llm_degraded_reason", None),
+                    "pre_resolved_count": pre_res or 0,
+                    "llm_auto_resolved": llm_auto_res,
+                    "llm_cases_selected": getattr(run, "llm_cases_selected", None),
                 }) + "\n\n"
             else:
                 yield f"event: run_error\ndata: {json.dumps({'error': f'Reconciliation run {run_id} not found or stream expired.'})}\n\n"
@@ -1158,20 +1273,33 @@ def create_run(db: Session = Depends(get_db)):
     # Step 3: Filter exceptions
     exceptions = [r for r in phase1_results if r["status"] == "EXCEPTION"]
 
-    # Step 4: Phase 2 AI agent investigation (unified batch multi-agent)
+    # Step 4: Phase 2 exception resolution — deterministic proof first, then AI.
+    # Mirrors _execute_reconciliation_pipeline so both endpoints resolve
+    # exceptions by the same rules.
     t_p2_start = time.time()
     toolkit = FinancialToolkit(payments, ledger, bank, adjustments)
 
     from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
     from src.agent.batch_partitioner import partition_exceptions_balanced
 
+    print_pre_filter_header()
+    pre_filter = prefilter_proven_exceptions(exceptions, toolkit)
+    ambiguous_exceptions = pre_filter.ambiguous_exceptions
+    print_pre_filter_summary(pre_filter)
+
     resolution = _resolve_investigation_providers()
     batch_agent = BatchMultiAgentController(toolkit=toolkit, resolution=resolution)
-    chunks = partition_exceptions_balanced(exceptions, batch_size=5) if exceptions else []
+    chunks = (
+        partition_exceptions_balanced(ambiguous_exceptions, batch_size=5)
+        if ambiguous_exceptions
+        else []
+    )
     max_parallel_workers = max(1, min(len(chunks), int(os.getenv("MAX_PARALLEL_BATCHES", "5")))) if chunks else 1
 
-    agent_decisions = []
-    investigation_logs = []
+    # Pre-resolved cases lead the list; the accounting invariant below needs one
+    # decision per Phase 1 exception.
+    agent_decisions = list(pre_filter.proven_decisions)
+    investigation_logs = _pre_filter_investigation_logs(pre_filter, exceptions)
     degraded_cases = 0
 
     batch_results_by_index: Dict[int, Any] = {}
@@ -1233,23 +1361,13 @@ def create_run(db: Session = Depends(get_db)):
         for d in chunk_decisions:
             agent_decisions.append(d)
             exc_obj = next((c for c in chunk if c.get("transaction_id") == d.transaction_id), {})
-            tools_used = list(tool_provenance.get(d.transaction_id, []))
-            investigation_logs.append({
-                "transaction_id": d.transaction_id,
-                "initial_exception": d.exception_type or exc_obj.get("reason", "UNKNOWN"),
-                "tools_used": tools_used,
-                "evidence": d.evidence or [],
-                "decision": d.decision,
-                "resolution_type": d.resolution_type or "NONE",
-                "resolved_difference": d.resolved_difference,
-                "reason": d.reason,
-                "confidence": d.confidence,
-                "recommended_action": d.recommended_action,
-                "tool_call_count": len(tools_used),
-                "tool_traces": [],
-                "resolution_source": d.resolution_source,
-                "model_interactions": d.model_interactions,
-            })
+            investigation_logs.append(
+                _build_investigation_log(
+                    d,
+                    initial_exception=exc_obj.get("reason", "UNKNOWN"),
+                    tools_used=list(tool_provenance.get(d.transaction_id, [])),
+                )
+            )
 
     t_p2_end = time.time()
     phase2_time_sec = max(t_p2_end - t_p2_start, 0.001)
@@ -1271,6 +1389,9 @@ def create_run(db: Session = Depends(get_db)):
     initial_match_rate = phase1_metrics["match_rate"]
     agent_resolution_rate = (auto_resolved / initial_exceptions * 100) if initial_exceptions > 0 else 0.0
     final_resolution_rate = (final_resolved / total_records * 100) if total_records > 0 else 0.0
+
+    llm_case_count = len(ambiguous_exceptions)
+    llm_auto_resolved = auto_resolved - pre_filter.pre_resolved_count
 
     # Synthetic data ships with ground truth, so this path is always scored --
     # including Phase 1 detection, which is measured rather than assumed.
@@ -1303,7 +1424,7 @@ def create_run(db: Session = Depends(get_db)):
     else:
         token_totals = _multi_agent_token_totals(batch_agent)
     tokens_per_case = (
-        (token_totals["total_tokens"] or 0) / len(agent_decisions) if agent_decisions else None
+        (token_totals["total_tokens"] or 0) / llm_case_count if llm_case_count else None
     )
 
     run_data = {
@@ -1338,8 +1459,9 @@ def create_run(db: Session = Depends(get_db)):
         "phase1_false_negatives": eval_results.phase1_false_negatives,
         "not_evaluated": not_evaluated,
         "degraded_cases": degraded_cases,
-        "llm_cases_selected": len(exceptions),
-        "llm_cases_completed": auto_resolved + human_review,
+        "pre_resolved_count": pre_filter.pre_resolved_count,
+        "llm_cases_selected": llm_case_count,
+        "llm_cases_completed": llm_auto_resolved + human_review,
         "llm_cases_not_evaluated": not_evaluated,
         "phase1_time_sec": round(phase1_time_sec, 4),
         "phase2_time_sec": round(phase2_time_sec, 4),

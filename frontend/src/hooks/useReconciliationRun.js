@@ -6,10 +6,11 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
   const [notification, setNotification] = useState(null);
   const [error, setError] = useState(null);
   const [progressState, setProgressState] = useState({
-    stage: 'READY', // 'READY' | 'UPLOADING' | 'PHASE_1' | 'PHASE_2' | 'COMPLETED' | 'FAILED'
+    stage: 'READY', // 'READY' | 'UPLOADING' | 'PHASE_1' | 'PRE_BATCH' | 'PHASE_2' | 'COMPLETED' | 'FAILED'
     totalRecords: 0,
     phase1: null, // { reconciled: 0, exceptions: 0, total: 0 }
-    phase2: null, // { batchesTotal: 0, batchesDone: 0, resolved: 0, humanReview: 0, exceptionCount: 0 }
+    preBatch: null, // { preResolved: 0, remaining: 0, total: 0 }
+    phase2: null, // { batchesTotal: 0, batchesDone: 0, resolved: 0, llmResolved: 0, humanReview: 0, exceptionCount: 0 }
     error: null,
   });
 
@@ -74,6 +75,7 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
         stage: 'UPLOADING',
         totalRecords: 0,
         phase1: null,
+        preBatch: null,
         phase2: null,
         error: null,
       });
@@ -140,6 +142,36 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
         } catch (_) {}
       });
 
+      es.addEventListener('pre_filter_started', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setProgressState((prev) => ({
+            ...prev,
+            stage: 'PRE_BATCH',
+            preBatch: {
+              preResolved: 0,
+              remaining: data.total_exceptions ?? prev.phase1?.exceptions ?? 0,
+              total: data.total_exceptions ?? prev.phase1?.exceptions ?? 0,
+            },
+          }));
+        } catch (_) {}
+      });
+
+      es.addEventListener('pre_filter_completed', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setProgressState((prev) => ({
+            ...prev,
+            stage: 'PRE_BATCH',
+            preBatch: {
+              preResolved: data.pre_resolved_count ?? 0,
+              remaining: data.remaining_for_ai ?? 0,
+              total: data.total_exceptions ?? prev.phase1?.exceptions ?? 0,
+            },
+          }));
+        } catch (_) {}
+      });
+
       es.addEventListener('phase2_started', (e) => {
         try {
           const data = JSON.parse(e.data);
@@ -165,10 +197,16 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
           setProgressState((prev) => ({
             ...prev,
             stage: 'PHASE_2',
+            preBatch: prev.preBatch || (data.pre_resolved_count != null ? {
+              preResolved: data.pre_resolved_count,
+              remaining: data.exception_count ?? 0,
+              total: data.total_exceptions ?? (prev.phase1?.exceptions || 0),
+            } : null),
             phase2: {
               batchesTotal: data.batch_count,
               batchesDone: 0,
-              resolved: 0,
+              resolved: data.pre_resolved_count ?? 0,
+              llmResolved: 0,
               humanReview: 0,
               exceptionCount: data.exception_count,
             },
@@ -209,21 +247,31 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
         try {
           const data = JSON.parse(e.data);
           const bNum = data.batch_index;
-          setProgressState((prev) => ({
-            ...prev,
-            stage: 'PHASE_2',
-            phase2: {
-              batchesTotal: data.batch_total,
-              batchesDone: data.completed_batches ?? data.batch_index,
-              resolved: data.cumulative_resolved,
-              humanReview: data.cumulative_human_review,
-              // Cases the LLM never actually judged (provider/parse failure).
-              // Dropping this made a batch that failed outright indistinguishable
-              // from one that legitimately escalated nothing.
-              notEvaluated: data.cumulative_not_evaluated ?? 0,
-              exceptionCount: prev.phase2?.exceptionCount || 0,
-            },
-          }));
+          setProgressState((prev) => {
+            const preResolved = data.pre_resolved_count ?? prev.preBatch?.preResolved ?? 0;
+            const llmResolved = data.llm_auto_resolved ?? Math.max(0, (data.cumulative_resolved ?? 0) - preResolved);
+            return {
+              ...prev,
+              stage: 'PHASE_2',
+              preBatch: prev.preBatch || (data.pre_resolved_count != null ? {
+                preResolved: data.pre_resolved_count,
+                remaining: (prev.phase1?.exceptions ?? 0) - data.pre_resolved_count,
+                total: prev.phase1?.exceptions ?? 0,
+              } : null),
+              phase2: {
+                batchesTotal: data.batch_total,
+                batchesDone: data.completed_batches ?? data.batch_index,
+                resolved: data.cumulative_resolved,
+                llmResolved: llmResolved,
+                humanReview: data.cumulative_human_review,
+                // Cases the LLM never actually judged (provider/parse failure).
+                // Dropping this made a batch that failed outright indistinguishable
+                // from one that legitimately escalated nothing.
+                notEvaluated: data.cumulative_not_evaluated ?? 0,
+                exceptionCount: prev.phase2?.exceptionCount || 0,
+              },
+            };
+          });
           setStreamingState((prev) => {
             const currentBatches = prev.batches ? { ...prev.batches } : {};
             currentBatches[bNum] = {
@@ -284,14 +332,38 @@ export function useReconciliationRun(setActiveRunId, refreshRuns) {
             String(data.llm_mode || '').toUpperCase() === 'DEMO' ||
             String(data.llm_provider || '').toLowerCase() === 'demo';
 
-          setProgressState((prev) => ({
-            ...prev,
-            stage: 'COMPLETED',
-            notEvaluated,
-            degradedCases,
-            isEmulated,
-            hasGroundTruth: Boolean(data.has_ground_truth),
-          }));
+          setProgressState((prev) => {
+            const preResolved = data.pre_resolved_count ?? prev.preBatch?.preResolved ?? 0;
+            const remainingForAi = data.llm_cases_selected ?? prev.preBatch?.remaining ?? 0;
+            const totalExc = (data.pre_resolved_count != null && data.llm_cases_selected != null)
+              ? (data.pre_resolved_count + data.llm_cases_selected)
+              : (prev.phase1?.exceptions ?? 0);
+
+            return {
+              ...prev,
+              stage: 'COMPLETED',
+              notEvaluated,
+              degradedCases,
+              isEmulated,
+              hasGroundTruth: Boolean(data.has_ground_truth),
+              preResolvedCount: preResolved,
+              llmCasesSelected: remainingForAi,
+              llmAutoResolved: data.llm_auto_resolved ?? Math.max(0, (data.ai_auto_resolved ?? 0) - preResolved),
+              preBatch: {
+                preResolved: preResolved,
+                remaining: remainingForAi,
+                total: totalExc,
+              },
+              phase2: prev.phase2 ? {
+                ...prev.phase2,
+                batchesDone: prev.phase2.batchesTotal,
+                resolved: data.ai_auto_resolved ?? prev.phase2.resolved,
+                llmResolved: data.llm_auto_resolved ?? Math.max(0, (data.ai_auto_resolved ?? 0) - preResolved),
+                humanReview: data.human_review ?? prev.phase2.humanReview,
+                notEvaluated: data.not_evaluated ?? prev.phase2.notEvaluated ?? 0,
+              } : null,
+            };
+          });
           setWorkflowState('COMPLETED');
 
           // A run where no case was evaluated completed as a pipeline but

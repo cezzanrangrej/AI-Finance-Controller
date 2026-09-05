@@ -17,8 +17,7 @@ Traditional financial operations face two critical failure modes:
 ---
 
 ## Architecture Overview
-
-The system operates as a two-phase pipeline with strict separation between deterministic accounting and AI-driven reasoning:
+The system operates as a 5-stage reconciliation pipeline with strict separation between deterministic accounting and AI-driven reasoning:
 
 ```text
                                   [Raw Financial Data Feeds]
@@ -26,70 +25,98 @@ The system operates as a two-phase pipeline with strict separation between deter
                                              │
                                              ▼
                              ┌────────────────────────────────┐
-                             │  Phase 1: Deterministic Engine │
-                             │   (ReconciliationEngine.py)    │
+                             │  Step 1: Ingestion & Normalizer│
+                             │    (src/normalizer/)           │
+                             │  - Strict Python Decimal Coerce│
+                             └───────────────┬────────────────┘
+                                             │
+                                             ▼
+                             ┌────────────────────────────────┐
+                             │  Step 2: Phase 1 Deterministic │
+                             │   (src/reconciliation.py)      │
                              │  - 6 Strict Rule Checkers      │
-                             │  - Python Decimal Precision    │
+                             │  - Gross, Fee, Bank, Duplicate │
                              └───────────────┬────────────────┘
                                              │
                        ┌─────────────────────┴─────────────────────┐
                        ▼                                           ▼
-             [RECONCILED (95-98%)]                         [EXCEPTIONS (2-5%)]
+             [RECONCILED (70-95%)]                         [EXCEPTIONS (5-30%)]
            (Zero LLM Cost, Instant)                                │
                                                                    ▼
                                                    ┌───────────────────────────────┐
-                                                   │ Balanced Batch Partitioner    │
-                                                   │    (batch_partitioner.py)     │
+                                                   │ Step 3: Pre-Batch Proof Pass  │
+                                                   │    (src/agent/pre_filter.py)  │
+                                                   │  - Python Decimal Math Proof  │
+                                                   │  - 0 LLM Tokens, 0 API Calls  │
                                                    └───────────────┬───────────────┘
                                                                    │
-                                                                   ▼
-                                                   ┌───────────────────────────────┐
-                                                   │ Parallel Batch Async Engine   │
-                                                   │   (asyncio.Semaphore Worker)  │
-                                                   └───────────────┬───────────────┘
-                                                                   │
-                                    ┌──────────────────────────────┴──────────────────────────────┐
-                                    ▼                                                             ▼
-                    ┌───────────────────────────────┐                             ┌───────────────────────────────┐
-                    │      Investigator Agent       │                             │      Authoritative Proof      │
-                    │      (Maker / Proposer)       │                             │     (Python Decimal Check)    │
-                    │ - Read-Only Financial Toolkit │                             │ - Mathematical Proof Gate     │
-                    │ - Gathers Facts & Hypothesis  │                             └───────────────┬───────────────┘
-                    └───────────────┬───────────────┘                                             │
-                                    │                                                             │
-                                    ▼                                                             │
-                    ┌───────────────────────────────┐                                             │
-                    │        Verifier Agent         │                                             │
-                    │      (Checker / Auditor)      │                                             │
-                    │ - Conservative Review         │                                             │
-                    │ - Tests Evidence & Conflicts  │                                             │
-                    └───────────────┬───────────────┘                                             │
-                                    │                                                             │
-                                    └──────────────────────────────┬──────────────────────────────┘
-                                                                   ▼
-                                                   ┌───────────────────────────────┐
-                                                   │  Consensus & Safety Policy    │
-                                                   │ (AUTO_RESOLVED vs HUMAN_REV)  │
-                                                   └───────────────┬───────────────┘
-                                                                   │
-                                       ┌───────────────────────────┴───────────────────────────┐
-                                       ▼                                                       ▼
-                            ┌─────────────────────┐                                 ┌─────────────────────┐
-                            │    FastAPI & DB     │                                 │   Next.js / React   │
-                            │  Audit Trails & SSE │◄────────────────────────────────┤ Real-Time Dashboard │
-                            └─────────────────────┘                                 └─────────────────────┘
+                                     ┌─────────────────────────────┴─────────────────────────────┐
+                                     ▼                                                           ▼
+                           [AUTO_RESOLVED (Proven)]                                    [AMBIGUOUS EXCEPTIONS]
+                          (Deterministic Adjustment)                                             │
+                                                                                                 ▼
+                                                                                 ┌───────────────────────────────┐
+                                                                                 │  Balanced Batch Partitioner   │
+                                                                                 │    (batch_partitioner.py)     │
+                                                                                 │  - Category Diversification   │
+                                                                                 │  - Straggler Elimination      │
+                                                                                 └───────────────┬───────────────┘
+                                                                                                 │
+                                                                                                 ▼
+                                                                                 ┌───────────────────────────────┐
+                                                                                 │ Step 4: Parallel Batch Engine │
+                                                                                 │  (asyncio / Thread Workers)   │
+                                                                                 └───────────────┬───────────────┘
+                                                                                                 │
+                                                                 ┌───────────────────────────────┴───────────────────────────────┐
+                                                                 ▼                                                               ▼
+                                                 ┌───────────────────────────────┐                               ┌───────────────────────────────┐
+                                                 │      Investigator Agent       │                               │        Verifier Agent         │
+                                                 │      (Maker / Proposer)       │                               │      (Checker / Auditor)      │
+                                                 │ - Read-Only Financial Toolkit │══════════════════════════════>│ - Conservative Audit Review   │
+                                                 │ - Correlates Unmatched Context│       (Proposed Evidence)     │ - Cross-Checks Source Records │
+                                                 └───────────────────────────────┘                               └───────────────┬───────────────┘
+                                                                                                                                 │
+                                                                                                 ┌───────────────────────────────┘
+                                                                                                 ▼
+                                                                                 ┌───────────────────────────────┐
+                                                                                 │   Consensus & Safety Policy   │
+                                                                                 │  - Unanimous Agreement Check  │
+                                                                                 │  - Conservative Escalation    │
+                                                                                 └───────────────┬───────────────┘
+                                                                                                 │
+                                                                 ┌───────────────────────────────┴───────────────────────────────┐
+                                                                 ▼                                                               ▼
+                                                     [AUTO_RESOLVED (LLM)]                                               [HUMAN_REVIEW]
+                                                   (Consensus-Backed Fix)                                            (Breaks / Missing Records)
+                                                                 │                                                               │
+                                                                 └───────────────────────────────┬───────────────────────────────┘
+                                                                                                 │
+                                                                                                 ▼
+                                                                                 ┌───────────────────────────────┐
+                                                                                 │  Step 5: Final Resolution     │
+                                                                                 │  - Accounting Invariant Gate  │
+                                                                                 │  - ACID SQLite Persistence    │
+                                                                                 └───────────────┬───────────────┘
+                                                                                                 │
+                                                                     ┌───────────────────────────┴───────────────────────────┐
+                                                                     ▼                                                       ▼
+                                                          ┌─────────────────────┐                                 ┌─────────────────────┐
+                                                          │    FastAPI Server   │                                 │   React 18 + Vite   │
+                                                          │  Audit Trails & SSE │◄────────────────────────────────┤ 5-Stage Live Console│
+                                                          └─────────────────────┘                                 └─────────────────────┘
 ```
 
 ### Pipeline Flow
-1. **Canonical Ingestion & Normalization (`src/normalizer/`)**: Raw source files (Payments, ERP Ledgers, Bank Statements, Adjustments) are parsed into canonical models. All currency values are coerced into exact Python `Decimal` representations to eliminate floating-point drift.
-2. **Phase 1 Deterministic Matching (`src/reconciliation.py`)**: Executes in ~5 milliseconds per 100 transactions. Evaluates 6 fundamental accounting checks (gross amount equality, ledger entry existence, fee calculations, bank clearance, duplicate detection, and net balance matching). Exactly matched records are closed immediately.
-3. **Balanced Batch Partitioning (`src/agent/batch_partitioner.py`)**: Only unresolved Phase 1 exceptions are forwarded to Phase 2. To avoid straggler bottlenecks, exceptions are categorized by discrepancy type and scheduled into balanced 5-case batches across concurrent worker threads.
-4. **Phase 2 AI Investigation (`src/agent/multi_agent/`)**:
-   - **Investigator Agent**: Queries tools and correlates adjustments to formulate an `InvestigationProposal`.
-   - **Deterministic Proof Engine**: Verifies that any proposed resolution mathematically balances the discrepancy against verified adjustment records (`has_sufficient_resolution_evidence()`).
-   - **Verifier Agent**: Independently critiques the resolution against raw source records.
-   - **Consensus Policy**: If both agents agree and arithmetic proof holds, the case is marked `AUTO_RESOLVED`. Any ambiguity, missing proof, or agent disagreement automatically routes the case to `HUMAN_REVIEW`.
-5. **Real-Time SSE Streaming & Persistence (`src/api/routes/runs.py`)**: Lifecycle milestones (`phase1_completed`, `batch_started`, `case_completed`, `batch_completed`) stream over Server-Sent Events to the React dashboard while recording an immutable SQLite audit log.
+1. **Step 1: Canonical Ingestion & Normalization (`src/normalizer/`)**: Multi-source feeds (Payments, ERP General Ledgers, Bank Statements, Adjustments) are parsed into standardized canonical models. All currency values are strictly coerced into arbitrary-precision Python `Decimal` objects to eliminate floating-point inaccuracies.
+2. **Step 2: Phase 1 Deterministic Matching (`src/reconciliation.py`)**: Executes in ~5 milliseconds per 100 transactions. Evaluates 6 fundamental double-entry accounting rules (gross amount equality, ledger entry existence, fee calculations, bank clearance, duplicate detection, and net balance matching). Clean matches (typically 70–95%) are marked `RECONCILED` immediately at **zero LLM cost**.
+3. **Step 3: Pre-Batch Deterministic Proof Pass (`src/agent/pre_filter.py`)**: Before exceptions are batched or dispatched to LLMs, an upstream mathematical proof pass tests whether documented adjustment records (fee waivers, chargebacks, timing adjustments) already explain the discrepancy. Cases with verifiable arithmetic proofs are resolved immediately as `AUTO_RESOLVED` (`source: DETERMINISTIC_PROOF`) at **0 LLM tokens, 0 API calls, and zero external latency**.
+4. **Step 4: Parallel Batch AI Investigation (`src/agent/multi_agent/` & `src/agent/batch_partitioner.py`)**:
+   - **Balanced Batch Partitioner**: Only the remaining ambiguous exceptions are scheduled into balanced 5-case batches, round-robining discrepancy categories across parallel worker threads to eliminate stragglers.
+   - **Investigator Agent (Maker)**: Uses read-only financial tools to examine unmatched records, correlate missing ledger lines, and hypothesize root causes.
+   - **Verifier Agent (Checker)**: Independently critiques the investigator's proposal against double-entry rules and raw source records.
+   - **Consensus & Conservative Escalation**: High-confidence unanimous decisions are marked `AUTO_RESOLVED`. Genuine breaks, missing records, data anomalies, or agent disagreements safely escalate to `HUMAN_REVIEW`.
+5. **Step 5: Final Resolution, Audit Trails & Real-Time SSE Dashboard (`src/api/routes/runs.py`, `frontend/`)**: Enforces strict accounting invariant preservation (`total_records == reconciled + auto_resolved + human_review + not_evaluated`), writes immutable SQLite audit logs, and streams live progress across all 5 stages to the React dashboard.
 
 ---
 
@@ -132,6 +159,7 @@ ReconPilot/
 │   │   ├── grok_client.py      # xAI Grok client
 │   │   ├── openrouter_client.py# OpenRouter client
 │   │   ├── parallel_batch_engine.py # Async parallel batch execution engine
+│   │   ├── pre_filter.py       # Pre-batch deterministic proof engine (0 tokens)
 │   │   ├── prompts.py          # Structured system and verification prompts
 │   │   ├── provider_resolution.py # Dynamic provider/credential resolution
 │   │   ├── rate_limit.py       # LLMRateLimitError, jittered backoff, and retry wrapper
@@ -161,23 +189,27 @@ ReconPilot/
 - **Decision**: All financial arithmetic, balance checks, and evidence evaluations are performed strictly in Python using arbitrary-precision `Decimal`. LLMs are forbidden from performing unverified math.
 - **Why**: Standard IEEE 754 floating-point numbers introduce rounding errors (`0.1 + 0.2 = 0.30000000000000004`), while generative LLMs frequently hallucinate arithmetic totals. In this architecture, LLMs hypothesize correlations, but the Python proof engine verifies that adjustments sum up to the exact penny before any resolution is accepted.
 
-### 2. Selective AI Invocation & Balanced Batching
-- **Decision**: Records are never sent to an LLM on a 1:1 basis. 100% of records pass through Phase 1 deterministic rules first; only un-reconciled exceptions are routed to Phase 2 in balanced 5-case batches.
-- **Why**: In typical financial datasets, 70–90% of transactions match cleanly. Running full LLM inference across every transaction wastes immense latency and API budget. Filtering first and grouping exceptions into balanced batches reduces token consumption by **>90%** and wall-clock execution time by **>80%**.
+### 2. Pre-Batch Deterministic Proof Pass (0-Token Upstream Resolution)
+- **Decision**: Exceptions raised by Phase 1 double-entry rules pass through an upstream mathematical proof filter (`src/agent/pre_filter.py`) before any batching or LLM dispatch occurs. If an exception's discrepancy is arithmetically balanced by verified adjustment records, it is immediately marked `AUTO_RESOLVED` (`source: DETERMINISTIC_PROOF`).
+- **Why**: Many exceptions (such as approved fee differences or promotional concessions) are already documented by adjustments and explainable with pure `Decimal` math. Previously, these were batched, sent to LLM agents, and overridden post-hoc. Resolving them upstream eliminates 100% of LLM tokens and API latency for proven cases, preserves agent resources strictly for ambiguous breaks, and ensures the audit trail records honest deterministic provenance.
 
-### 3. Dual-Agent Separation with Conservative Escalation
+### 3. Selective AI Invocation & Balanced Batching
+- **Decision**: Records are never sent to an LLM on a 1:1 basis. 100% of records pass through Phase 1 deterministic rules, followed by the Pre-Batch Deterministic Proof pass. Only the remaining ambiguous exceptions are partitioned into balanced 5-case batches.
+- **Why**: In typical financial datasets, 70–95% of transactions match cleanly, and another substantial portion of exceptions are resolved by documented adjustments. Running full LLM inference across every transaction wastes immense latency and API budget. Filtering upstream and grouping remaining exceptions into balanced batches reduces token consumption by **>90%** and wall-clock execution time by **>80%**.
+
+### 4. Dual-Agent Separation with Conservative Escalation
 - **Decision**: In multi-agent mode, an Investigator Agent proposes resolutions while an independent Verifier Agent critiques the proposal against raw source records. If the agents disagree or evidence is incomplete, the system escalates to `HUMAN_REVIEW`.
 - **Why**: Financial compliance requires defense-in-depth. Single-agent setups are vulnerable to confirmation bias. Separating investigation from verification enforces consensus and guarantees zero false-positive auto-resolutions on unprovable discrepancies.
 
-### 4. Resilient Multi-Tier Rate-Limit Defense
+### 5. Resilient Multi-Tier Rate-Limit Defense
 - **Decision**: Integrated a dedicated rate-limit layer (`LLMRateLimitError`) with per-thread exponential backoff, jitter, and automatic retry-after parsing. If provider quota is completely exhausted (HTTP 429), the affected batch fast-fails to `NOT_EVALUATED` rather than crashing the system.
 - **Why**: Free-tier or shared enterprise LLM quotas often experience burst throttling. Thread-independent retries prevent a single throttled thread from blocking others. If quota is exhausted, isolating failures to `NOT_EVALUATED` preserves the rest of the run and leaves a clean audit trail.
 
-### 5. Strict Accounting Invariant Preservation
+### 6. Strict Accounting Invariant Preservation
 - **Decision**: The system enforces that `total_records == reconciled + auto_resolved + human_review + not_evaluated` at every lifecycle stage, including unexpected cancellations and API provider errors.
 - **Why**: In financial accounting, an unaccounted-for record is a catastrophic data leak. Guaranteeing that every record is cataloged ensures complete regulatory auditability under all operating conditions.
 
-### 6. Diversified Exception-Type Scheduling
+### 7. Diversified Exception-Type Scheduling
 - **Decision**: Rather than grouping exceptions sequentially (`[0..5]`, `[5..10]`), the scheduler round-robins different exception categories (e.g., fee mismatches, missing bank lines, duplicate charges) across batches.
 - **Why**: Parallel batch latency is dictated by the slowest worker. Spreading tool-intensive or complex exception types across batches prevents hotspot worker threads from inflating total run time.
 
@@ -309,7 +341,7 @@ python scripts/generate_report.py --run-id run_abc12345 --format json --out repo
 
 ### 7. Running the Automated Test Suite
 
-Execute the full automated test suite (303 passed, 2 skipped):
+Execute the full automated test suite (304 passed, 2 skipped):
 
 ```bash
 python -m pytest tests/ -v
@@ -338,12 +370,12 @@ python -m pytest tests/ -v
 ### What's Genuinely Working
 
 - **Instant Phase 1 Deterministic Engine**: Evaluates 6 core double-entry accounting rules across 100 transactions in ~5 milliseconds with 100% mathematical precision (zero floating-point error).
-- **Parallel Batch AI Investigation**: Groups exceptions into balanced 5-case batches and processes them concurrently across worker threads, achieving >80% latency reduction and >90% token savings compared to serial single-case investigation.
-- **Post-LLM Deterministic Proof Engine**: Validates every LLM proposal against database records (`has_sufficient_resolution_evidence()`). Automatically promotes valid adjustment-backed cases to `AUTO_RESOLVED` and provides calculation proofs.
-- **Multi-Agent Consensus**: Investigator and Verifier dual-agent collaboration with strict conservative escalation: unresolved, incomplete, or disputed cases are safely escalated to `HUMAN_REVIEW`.
-- **Live SSE Event Streaming**: Full multi-stage lifecycle updates (`phase1_started`, `batch_started`, `case_completed`, `batch_completed`) stream in real time to the React dashboard with active batch chips and progress bars.
+- **Pre-Batch Deterministic Proof Engine**: Upstream arithmetic pass (`src/agent/pre_filter.py`) proves and closes adjustment-backed exceptions before batching or LLM dispatch using Python `Decimal` arithmetic—achieving instant resolution at 0 LLM tokens and 0 API calls.
+- **Parallel Batch AI Investigation**: Groups remaining ambiguous exceptions into balanced 5-case batches and processes them concurrently across worker threads, achieving >80% latency reduction and >90% token savings compared to serial single-case investigation.
+- **Multi-Agent Consensus & Conservative Escalation**: Investigator and Verifier dual-agent collaboration with strict conservative escalation: unresolved, incomplete, or disputed cases are safely escalated to `HUMAN_REVIEW`.
+- **5-Stage Real-Time Pipeline & React Console**: Full multi-stage lifecycle updates (Data Ingestion, Phase 1 Match, Pre-Batch Proof, AI Investigation, Final Resolution) stream in real time via SSE to the React dashboard with live progress indicators and actual record counts.
 - **Provider Resilience & Rate-Limit Defense**: Thread-isolated retries with jittered exponential backoff; gracefully handles HTTP 429 quota exhaustion by marking affected cases `NOT_EVALUATED` without stalling other threads.
-- **Comprehensive Test Suite & Production Build**: 303 automated tests passing in Python; clean production frontend bundle (`npm run build`) with zero errors.
+- **Comprehensive Test Suite & Production Build**: 304 automated tests passing in Python; clean production frontend bundle (`npm run build`) with zero errors.
 - **Full Auditability & Report Exports**: Detailed audit logs, execution traces, and executive report export in both Markdown and JSON formats.
 
 ### Known Limitations

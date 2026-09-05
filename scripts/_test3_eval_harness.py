@@ -23,6 +23,12 @@ import src.config  # noqa: F401  (loads .env)
 
 from src.reconciliation import ReconciliationEngine
 from src.agent.batch_partitioner import partition_exceptions_balanced
+from src.agent.pre_filter import (
+    prefilter_proven_exceptions,
+    print_pre_filter_header,
+    print_pre_filter_summary,
+)
+from src.agent.tools import FinancialToolkit
 
 DATA_DIR = r"C:\Users\cezza\OneDrive\Desktop\finance data\finance_test_dataset_03"
 BATCH_SIZE = 5
@@ -104,8 +110,22 @@ def main():
     if only_flagged:
         print(f"  [!] Flagged in ground_truth but NOT detected by engine: {sorted(only_flagged)}")
 
+    # ---- Deterministic pre-filter ----
+    # Runs before batching and before any LLM call. The batch controller no
+    # longer re-checks the arithmetic proof after the Verifier, so anything
+    # provable has to be claimed here or it is not claimed at all.
+    toolkit = FinancialToolkit(payments, ledger, bank, adjustments)
+    print_pre_filter_header()
+    pre_filter = prefilter_proven_exceptions(exceptions, toolkit)
+    print_pre_filter_summary(pre_filter)
+    ambiguous = pre_filter.ambiguous_exceptions
+
+    if pre_filter.pre_resolved_count:
+        print("Pre-resolved transaction IDs (Decimal proof, 0 tokens):")
+        print("  " + ", ".join(d.transaction_id for d in pre_filter.proven_decisions))
+
     # ---- Batching ----
-    batches = partition_exceptions_balanced(exceptions, batch_size=BATCH_SIZE)
+    batches = partition_exceptions_balanced(ambiguous, batch_size=BATCH_SIZE) if ambiguous else []
     print(f"\n=== BATCHING (batch_size={BATCH_SIZE}) -> {len(batches)} batches ===")
     for i, b in enumerate(batches, 1):
         ids = [c.get("transaction_id") for c in b]
@@ -117,11 +137,12 @@ def main():
 
     # ---- Phase 2 (paid / live) ----
     print("\n=== PHASE 2 BATCH MULTI-AGENT ===")
-    from src.agent.tools import FinancialToolkit
     from src.agent.multi_agent.batch_multi_agent_controller import BatchMultiAgentController
     from src.agent.evaluator import evaluate_agent_decisions
 
-    toolkit = FinancialToolkit(payments, ledger, bank, adjustments)
+    if not batches:
+        print("Every Phase 1 exception was closed by deterministic proof — no LLM invocation required.")
+
     controller = BatchMultiAgentController(toolkit=toolkit, provider=args.provider)
     print(f"Investigator: provider={getattr(controller.investigator_llm, 'provider_name', '?')} "
           f"model={getattr(controller.investigator_llm, 'model', '?')}")
@@ -162,7 +183,7 @@ def main():
     controller.investigator_llm.reset_cumulative_tokens()
     controller.verifier_llm.reset_cumulative_tokens()
 
-    all_decisions = []
+    all_decisions = list(pre_filter.proven_decisions)
     for i, b in enumerate(batches, 1):
         inv_before = len(finish_reasons["investigator"])
         ver_before = len(finish_reasons["verifier"])
@@ -186,6 +207,8 @@ def main():
 
     print("\n=== RESULTS ===")
     print(f"Cases evaluated:            {len(all_decisions)}")
+    print(f"  via Decimal proof:        {pre_filter.pre_resolved_count} (0 LLM tokens)")
+    print(f"  via AI multi-agent:       {len(ambiguous)}")
     print(f"Parse-failure warnings:     {len(warn_records)}")
     for w in warn_records:
         print(f"    WARN: {w}")
